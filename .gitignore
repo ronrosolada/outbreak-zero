@@ -1,0 +1,30 @@
+# Roblox place / model files (these are binary builds, not source)
+*.rbxl
+*.rbxlx
+*.rbxm
+*.rbxmx
+*.rbxl.lock
+*.rbxlx.lock
+
+# Rojo sourcemap (regenerated on demand)
+sourcemap.json
+
+# Toolchain install dir (Rokit downloads tool binaries here)
+.rokit/
+
+# Editor / IDE — keep shared VS Code config, ignore the rest
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Claude Code local session data (lock files, local-only settings)
+.claude/
+
+# Generated single-file source bundle (derived from src/ — not source of truth)
+OutbreakZero-source-bundle.md

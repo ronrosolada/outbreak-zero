@@ -1,0 +1,11 @@
+# rokit.toml — pins the command-line tools this project uses.
+# After installing Rokit, run `rokit install` in this folder to download
+# these exact versions. Commit this file so anyone who clones the project
+# gets identical tool versions.
+#
+# Docs: https://github.com/rojo-rbx/rokit
+
+[tools]
+rojo = "rojo-rbx/rojo@7.6.1"
+stylua = "JohnnyMorganz/StyLua@2.4.1"
+selene = "Kampfkarren/selene@0.30.1"

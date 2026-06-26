@@ -1,0 +1,200 @@
+--[[
+	RoundService (service)
+	----------------------
+	Runs ONE match for a given ROSTER of players (handed in by HubService when a
+	queue fills), then returns them to the hub:
+
+		Prep -> Action -> Results -> (back to hub)
+
+	HubService owns the "when does a match start" loop; RoundService owns "how a
+	match plays out". Match state is sent only to the roster; the rest of the
+	server keeps living in the hub.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = ReplicatedStorage:WaitForChild("Config")
+local GameConfig = require(Config:WaitForChild("GameConfig"))
+local RoundConfig = require(Config:WaitForChild("RoundConfig"))
+local RoundState = require(ReplicatedStorage:WaitForChild("Round"):WaitForChild("RoundState"))
+
+local RoundService = {}
+
+function RoundService:Initialize(services)
+	self.map = services.MapService
+	self.teams = services.TeamManager
+	self.economy = services.EconomyService
+	self.infection = services.InfectionService
+	self.progression = services.ProgressionService
+	self.objectives = services.ObjectiveService
+	self.stats = services.StatsService
+	self.net = require(ReplicatedStorage:WaitForChild("Net"))
+	self.phase = RoundState.Hub
+	self._arenaCounter = 0
+	self.spawnConns = {} :: { [Player]: RBXScriptConnection }
+end
+
+-- == Player placement (respawns) =============================================
+
+function RoundService:_placePlayer(player: Player)
+	if player:GetAttribute("InMatch") and (self.phase == RoundState.Prep or self.phase == RoundState.Action) then
+		self._arenaCounter += 1 -- spread respawners across spawn points
+		self.map:SendToArena(player, self._arenaCounter)
+	else
+		self.map:SendToHub(player)
+	end
+end
+
+function RoundService:OnPlayerAdded(player: Player)
+	player:SetAttribute("InMatch", false)
+	-- Placement (MapService) waits for the HumanoidRootPart itself.
+	local conn = player.CharacterAdded:Connect(function()
+		self:_placePlayer(player)
+	end)
+	self.spawnConns[player] = conn
+	if player.Character then
+		self:_placePlayer(player)
+	end
+end
+
+function RoundService:OnPlayerRemoving(player: Player)
+	local conn = self.spawnConns[player]
+	if conn then
+		conn:Disconnect()
+		self.spawnConns[player] = nil
+	end
+end
+
+-- == Match helpers ===========================================================
+
+function RoundService:_broadcast(roster: { Player }, phase: string, timeLeft: number)
+	local survivors = self.infection:GetSurvivorCount()
+	local infected = self.infection:GetInfectedCount()
+	for _, player in roster do
+		if player.Parent then
+			self.net.RoundStateChanged:FireClient(player, phase, timeLeft, survivors, infected)
+		end
+	end
+end
+
+function RoundService:_placeRoster(roster: { Player }, toArena: boolean)
+	local index = 0
+	for _, player in roster do
+		index += 1
+		if player.Parent then
+			if toArena then
+				self.map:SendToArena(player, index)
+			else
+				self.map:SendToHub(player)
+			end
+		end
+	end
+end
+
+function RoundService:_payout(roster: { Player }, infectedWin: boolean)
+	for _, player in roster do
+		if player.Parent then
+			local role = self.infection:GetRole(player)
+			self.economy:AddCoins(player, GameConfig.REWARD_PARTICIPATION)
+			if infectedWin and role == GameConfig.ROLE_INFECTED then
+				self.economy:AddCoins(player, GameConfig.REWARD_INFECTED_WIN)
+			elseif not infectedWin and role == GameConfig.ROLE_SURVIVOR then
+				self.economy:AddCoins(player, GameConfig.REWARD_SURVIVE_WIN)
+			end
+			-- Persistent progression: XP for finishing + a bonus for winning.
+			self.progression:AwardMatchResult(player, role, infectedWin)
+		end
+	end
+end
+
+-- == Run one match ===========================================================
+
+-- Prep + Action. Returns whether the infected won. Wrapped by RunMatch in a
+-- pcall so a mid-match error can't strand players or wedge the matchmaker.
+function RoundService:_runMatch(roster: { Player }): boolean
+	-- Pick a fresh arena for this match (random rotation), THEN drop the roster in.
+	self.map:LoadRandomMap()
+	self.stats:StartMatch(roster)
+	-- Prep: drop the roster into the arena for a brief setup window.
+	self.phase = RoundState.Prep
+	self:_placeRoster(roster, true)
+	for t = RoundConfig.PREP_SECONDS, 1, -1 do
+		self:_broadcast(roster, RoundState.Prep, t)
+		task.wait(1)
+	end
+
+	-- Action: assign roles, arm the objectives, run the round.
+	self.phase = RoundState.Action
+	self.infection:StartRound(roster)
+	self.objectives:StartObjectives(roster)
+	self:_broadcast(roster, RoundState.Action, RoundConfig.ACTION_SECONDS)
+	for t = RoundConfig.ACTION_SECONDS, 1, -1 do
+		self:_broadcast(roster, RoundState.Action, t)
+		if self.objectives:IsExtractionComplete() then
+			return false -- survivors powered up and escaped through extraction: survivors win
+		end
+		local survivors = self.infection:GetSurvivorCount()
+		local infected = self.infection:GetInfectedCount()
+		if infected <= 0 then
+			return false -- all infected left: survivors win, no dead air
+		end
+		if survivors <= 0 then
+			-- a real infected win only if survivors were actually tagged (not a walkover)
+			return self.infection:GetConversions() > 0
+		end
+		task.wait(1)
+	end
+	-- Final boundary: extraction may have completed during the last second's wait.
+	if self.objectives:IsExtractionComplete() then
+		return false
+	end
+	return true -- timer expired without extraction: the clock favors the infected
+end
+
+-- Blocks until the match is over. Cleanup ALWAYS runs, even if _runMatch errors.
+function RoundService:RunMatch(roster: { Player })
+	for _, player in roster do
+		player:SetAttribute("InMatch", true)
+	end
+
+	local ok, result = pcall(function()
+		return self:_runMatch(roster)
+	end)
+	local infectedWin = ok and result == true
+	if not ok then
+		warn("[RoundService] match error: " .. tostring(result))
+	end
+
+	-- Resolve: pay out + read commendations (both read roles) BEFORE clearing them.
+	self:_payout(roster, infectedWin)
+	local awards, perPlayer = self.stats:BuildResults(roster)
+	self.infection:EndRound(roster)
+	self.objectives:EndObjectives()
+
+	-- Results: announce + the results/commendations panel, then back to the hub.
+	local message = if infectedWin then "The Infected win!" else "The Survivors win!"
+	for _, player in roster do
+		if player.Parent then
+			self.net.Notify:FireClient(player, message)
+			local mine = perPlayer[player] or { generators = 0, rescues = 0, survived = false }
+			self.net.MatchResults:FireClient(player, infectedWin, awards, mine)
+		end
+	end
+	self.phase = RoundState.Results
+	self:_placeRoster(roster, false)
+	for t = RoundConfig.RESULTS_SECONDS, 1, -1 do
+		self:_broadcast(roster, RoundState.Results, t)
+		task.wait(1)
+	end
+
+	-- Back to the hub.
+	self.phase = RoundState.Hub
+	for _, player in roster do
+		player:SetAttribute("InMatch", false)
+		if player.Parent then
+			self.net.RoundStateChanged:FireClient(player, RoundState.Hub, 0, 0, 0)
+		end
+	end
+end
+
+return RoundService
