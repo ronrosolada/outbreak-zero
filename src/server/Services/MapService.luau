@@ -20,6 +20,7 @@ local Brand = require(ReplicatedStorage:WaitForChild("Brand"))
 local Config = ReplicatedStorage:WaitForChild("Config")
 local MapConfig = require(Config:WaitForChild("MapConfig"))
 local ObjectiveConfig = require(Config:WaitForChild("ObjectiveConfig"))
+local InfectionConfig = require(Config:WaitForChild("InfectionConfig"))
 
 local MapService = {}
 
@@ -805,6 +806,90 @@ end
 
 function MapService:GetMapFolder(): Folder?
 	return self.mapFolder
+end
+
+function MapService:GetArena(): Folder?
+	return self.mapFolder and self.mapFolder:FindFirstChild("Arena")
+end
+
+-- Survivor WalkSpeed multiplier from any Slow hazard zone the position is inside (1 = none).
+-- Drives the flooded-room slow; InfectionService:_applyMovement folds this into walk speed.
+function MapService:HazardSlowMult(pos: Vector3): number
+	local mult = 1
+	for _, z in self.hazards do
+		if z.slowMult and z.slowMult < 1 then
+			local inside
+			if z.shape == "box" then
+				inside = math.abs(pos.X - z.center.X) <= z.sizeX / 2 and math.abs(pos.Z - z.center.Z) <= z.sizeZ / 2
+			else
+				inside = (Vector3.new(pos.X - z.center.X, 0, pos.Z - z.center.Z)).Magnitude <= z.radius
+			end
+			if inside then
+				mult = math.min(mult, z.slowMult)
+			end
+		end
+	end
+	return mult
+end
+
+-- Infection %/sec from the strongest contamination zone at this position (0 = none).
+-- Per-zone `fill` (Goo 8, Slow 4, rail 6) wins; the centered maps' zones have no `fill`,
+-- so they default to the flat HAZARD_FILL_RATE. Drives the survivor meter in _tick.
+function MapService:HazardFillRate(pos: Vector3): number
+	local rate = 0
+	for _, z in self.hazards do
+		local inside
+		if z.shape == "box" then
+			inside = math.abs(pos.X - z.center.X) <= z.sizeX / 2 and math.abs(pos.Z - z.center.Z) <= z.sizeZ / 2
+		else
+			inside = (Vector3.new(pos.X - z.center.X, 0, pos.Z - z.center.Z)).Magnitude <= z.radius
+		end
+		if inside then
+			rate = math.max(rate, z.fill or InfectionConfig.HAZARD_FILL_RATE)
+		end
+	end
+	return rate
+end
+
+-- The current map's DYNAMIC hazards (carousel knockback, moving train, electrified rail)
+-- in arena space, for HazardService to actuate. Empty for the centered maps.
+function MapService:GetDynamicHazards(): { any }
+	local out = {}
+	local def = self.currentMap
+	if not def or def.format ~= "blockout" then
+		return out
+	end
+	for _, h in def.hazards do
+		if h.kind == "Knockback" then
+			table.insert(out, {
+				kind = "Knockback",
+				center = blockoutToArena(h.center[1], h.center[2], 0),
+				radius = h.radius,
+				knockback = h.knockback,
+				stagger = h.stagger,
+			})
+		elseif h.kind == "MovingHazard" then
+			table.insert(out, {
+				kind = "MovingHazard",
+				carSize = Vector3.new(h.carSize[1], h.carSize[2], h.carSize[3]),
+				from = blockoutToArena(h.path.from[1], h.path.from[2], h.carSize[2] / 2),
+				to = blockoutToArena(h.path.to[1], h.path.to[2], h.carSize[2] / 2),
+				period = h.periodSeconds,
+				telegraph = h.telegraphSeconds,
+				knockback = h.knockback,
+				downed = h.downed,
+			})
+		elseif h.kind == "Electrified" then
+			table.insert(out, {
+				kind = "Electrified",
+				center = blockoutToArena(h.center[1], h.center[2], 1),
+				sizeX = h.size[1],
+				sizeZ = h.size[2],
+				stun = h.stun,
+			})
+		end
+	end
+	return out
 end
 
 return MapService

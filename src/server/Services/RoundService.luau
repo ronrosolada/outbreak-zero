@@ -26,6 +26,7 @@ function RoundService:Initialize(services)
 	self.economy = services.EconomyService
 	self.infection = services.InfectionService
 	self.abilities = services.AbilityService
+	self.hazards = services.HazardService
 	self.progression = services.ProgressionService
 	self.objectives = services.ObjectiveService
 	self.stats = services.StatsService
@@ -140,6 +141,7 @@ function RoundService:_runMatch(roster: { Player }): (string, string)
 	self.phase = RoundState.Action
 	self.infection:StartRound(roster)
 	self.objectives:StartObjectives(roster)
+	self.hazards:StartHazards()
 	self:_broadcast(roster, RoundState.Action, RoundConfig.ACTION_SECONDS)
 	for t = RoundConfig.ACTION_SECONDS, 1, -1 do
 		self:_broadcast(roster, RoundState.Action, t)
@@ -187,6 +189,7 @@ function RoundService:RunMatch(roster: { Player })
 		self.infection:EndRound(roster)
 		self.objectives:EndObjectives()
 		self.abilities:ClearStructures()
+		self.hazards:StopHazards()
 		for _, player in roster do
 			if player.Parent then
 				self.net.Notify:FireClient(player, reason)
@@ -200,6 +203,7 @@ function RoundService:RunMatch(roster: { Player })
 		self.infection:EndRound(roster)
 		self.objectives:EndObjectives()
 		self.abilities:ClearStructures()
+		self.hazards:StopHazards()
 
 		-- Results: announce the WHY + the results/commendations panel.
 		for _, player in roster do

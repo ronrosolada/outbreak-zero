@@ -29,6 +29,7 @@ local SERVICE_ORDER = {
 	"InfectionService",
 	"AbilityService",
 	"ObjectiveService",
+	"HazardService",
 	"RoundService",
 	"HubService",
 	"PingService",
@@ -82,6 +83,7 @@ Players.PlayerRemoving:Connect(function(player)
 	services.CombatService:OnPlayerRemoving(player)
 	services.AbilityService:OnPlayerRemoving(player)
 	services.PingService:OnPlayerRemoving(player)
+	services.HazardService:OnPlayerRemoving(player)
 	services.StoreService:OnPlayerRemoving(player)
 	services.StatsService:OnPlayerRemoving(player)
 	services.ProgressionService:OnPlayerRemoving(player)

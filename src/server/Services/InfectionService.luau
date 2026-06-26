@@ -71,6 +71,7 @@ function InfectionService:Initialize(services)
 	self.gooPools = {} :: { { center: Vector3, radius: number, expires: number } }
 	self.nests = {} :: { { center: Vector3, radius: number, owner: Player, expires: number } }
 	self.inNest = {} :: { [Player]: boolean } -- survivors currently inside a nest (drives the slow)
+	self.inSlow = {} :: { [Player]: boolean } -- survivors currently in a Slow hazard zone (flooded room)
 end
 
 -- == Helpers =================================================================
@@ -109,6 +110,12 @@ function InfectionService:_applyMovement(player: Player)
 		local speed = base + (player:GetAttribute("CloakSpeedBonus") or 0)
 		if role == GameConfig.ROLE_SURVIVOR and self.inNest[player] then
 			speed *= InfectionConfig.NEST_SLOW_MULT -- inside a Controller nest
+		end
+		if role == GameConfig.ROLE_SURVIVOR and self.map then
+			local shrp = getRootPart(player)
+			if shrp then
+				speed *= self.map:HazardSlowMult(shrp.Position) -- flooded-room slow hazard
+			end
 		end
 		hum.WalkSpeed = speed
 	else
@@ -313,6 +320,7 @@ function InfectionService:_convert(player: Player)
 	self.immuneUntil[player] = nil
 	self.lastContact[player] = nil
 	self.inNest[player] = nil
+	self.inSlow[player] = nil
 	player:SetAttribute("Downed", false)
 	player:SetAttribute("Infection", 0)
 	self:_removePrompt(player)
@@ -378,17 +386,24 @@ function InfectionService:_tick(dt: number)
 					self:_applyMovement(player)
 				end
 
+				-- Flooded-room slow: re-apply movement only when slow-zone membership flips.
+				local nowSlow = self.map ~= nil and self.map:HazardSlowMult(hrp.Position) < 1
+				if nowSlow ~= (self.inSlow[player] == true) then
+					self.inSlow[player] = nowSlow
+					self:_applyMovement(player)
+				end
+
 				local immune = self:_isImmune(player)
 				local current = self.infection[player] or 0
 				local contact = anyContact(contacts, hrp.Position)
-				local hazard = self.map ~= nil and self.map:InHazard(hrp.Position)
+				local hazardFill = if self.map ~= nil then self.map:HazardFillRate(hrp.Position) else 0
 				local goo = inZone(self.gooPools, hrp.Position)
-				if contact or hazard or goo or nowInNest then
+				if contact or hazardFill > 0 or goo or nowInNest then
 					self.lastContact[player] = now
 					if not immune then
 						-- contact and/or hazard both fill; immunity blocks GAIN, not decay
 						local rate = (contact and InfectionConfig.FILL_RATE or 0)
-							+ (hazard and InfectionConfig.HAZARD_FILL_RATE or 0)
+							+ hazardFill
 							+ (goo and InfectionConfig.GOO_POOL_FILL_RATE or 0)
 							+ (nowInNest and InfectionConfig.NEST_FILL_BONUS or 0)
 						current += rate * self.classes:GetFillMult(player) * dt
@@ -479,6 +494,7 @@ function InfectionService:_onCharacterAdded(player: Player)
 		self.lastContact[player] = nil
 		self.immuneUntil[player] = os.clock() + InfectionConfig.SPAWN_IMMUNITY
 		self.inNest[player] = nil -- fresh body isn't in a nest; clear so it doesn't inherit the slow
+		self.inSlow[player] = nil
 		self.combat:GiveLoadout(player) -- re-issue weapons on a fresh body
 	elseif self.roundActive and self.roles[player] == GameConfig.ROLE_INFECTED then
 		-- Stunned survives respawn (drives the freeze + pending recover); re-create
@@ -504,6 +520,7 @@ function InfectionService:OnPlayerRemoving(player: Player)
 	self.immuneUntil[player] = nil
 	self.lastContact[player] = nil
 	self.inNest[player] = nil
+	self.inSlow[player] = nil
 end
 
 function InfectionService:StartRound(roster: { Player })
@@ -646,6 +663,16 @@ function InfectionService:ReduceInfection(player: Player, amount: number)
 	self:_setInfection(player, (self.infection[player] or 0) - amount)
 end
 
+-- Instantly down a survivor (e.g. a direct hit by the Line 0 train). Respects immunity
+-- and the survivor / already-downed guards, like the contact path.
+function InfectionService:ForceDown(player: Player)
+	if self.roles[player] ~= GameConfig.ROLE_SURVIVOR or self.downed[player] or self:_isImmune(player) then
+		return
+	end
+	self:_setInfection(player, 100)
+	self:_down(player)
+end
+
 -- == Ability zones (Spitter goo pools / Controller nests) ====================
 
 function InfectionService:_pruneZones(now: number)
@@ -708,6 +735,7 @@ function InfectionService:ClearZones()
 	self.gooPools = {}
 	self.nests = {}
 	self.inNest = {}
+	self.inSlow = {}
 end
 
 -- Phase 5 comeback: a team-wide cleanse fired when a generator is powered. Revives
