@@ -197,6 +197,9 @@ function CombatService:DamageInfected(target: Player, amount: number, attacker: 
 			end
 		end
 		self:_stun(target, duration)
+		if attacker then
+			self.net.KillFeed:FireAllClients("stun", attacker.Name)
+		end
 	else
 		target:SetAttribute("Health", hp)
 	end

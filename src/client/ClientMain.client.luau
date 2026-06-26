@@ -36,3 +36,6 @@ ShopController:Init()
 
 local RevealController = require(controllers:WaitForChild("RevealController"))
 RevealController:Init()
+
+local KillFeedController = require(controllers:WaitForChild("KillFeedController"))
+KillFeedController:Init()

@@ -163,6 +163,7 @@ function ObjectiveService:_onGenerator(index: number, gen: BasePart, player: Pla
 	self.powered[index] = true
 	self.gensOn += 1
 	self:_setAttr("GensPowered", self.gensOn)
+	self.net.KillFeed:FireAllClients("generator", tostring(self.gensOn), tostring(ObjectiveConfig.GEN_COUNT))
 
 	-- Done: recolor green, swap the beacon, kill the prompt.
 	gen.Color = Brand.Color.SafeGreen

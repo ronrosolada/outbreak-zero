@@ -296,6 +296,7 @@ function InfectionService:_tryRescue(downedPlayer: Player, rescuer: Player)
 	self:_applyMovement(downedPlayer)
 
 	self.net.Notify:FireClient(downedPlayer, "Rescued! Get moving!")
+	self.net.KillFeed:FireAllClients("rescue", rescuer.Name, downedPlayer.Name)
 	if rescuer.Parent then
 		self.economy:AddCoins(rescuer, GameConfig.REWARD_RESCUE)
 		self.net.Notify:FireClient(rescuer, "You rescued " .. downedPlayer.Name .. "!  +" .. GameConfig.REWARD_RESCUE)
@@ -331,6 +332,7 @@ function InfectionService:_convert(player: Player)
 	self.costume:Apply(player, GameConfig.ROLE_INFECTED)
 
 	self.net.Notify:FireClient(player, "You've turned! Hunt the survivors.")
+	self.net.KillFeed:FireAllClients("infect", player.Name)
 end
 
 -- == The driving loop ========================================================
@@ -589,6 +591,7 @@ function InfectionService:StartRound(roster: { Player })
 		end
 	end
 
+	self.net.KillFeed:FireAllClients("outbreak")
 	self:_startLoop()
 end
 

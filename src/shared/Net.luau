@@ -31,6 +31,7 @@ local REMOTE_NAMES = {
 	"EquipItem", -- client -> server: equip an owned trail by id
 	"RevealInfected", -- server -> survivors: outline these infected for N seconds (Scout Motion Ping)
 	"RevealSurvivors", -- server -> Patient Zero: outline all survivors for N seconds (Outbreak Pulse)
+	"KillFeed", -- server -> all: a feed event (kind, nameA, nameB) — infect / rescue / stun / generator / outbreak
 }
 
 local remotesFolder = ReplicatedStorage:WaitForChild("Remotes")
