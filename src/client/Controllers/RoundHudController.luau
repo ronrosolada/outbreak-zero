@@ -12,6 +12,7 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local Net = require(ReplicatedStorage:WaitForChild("Net"))
@@ -145,6 +146,30 @@ function RoundHudController:Init()
 	fillCorner.CornerRadius = UDim.new(1, 0)
 	fillCorner.Parent = infectionFill
 
+	-- Animated "barber-pole" diagonal stripes over the fill (the signature meter look).
+	infectionFill.ClipsDescendants = true
+	local stripe = Instance.new("Frame")
+	stripe.Name = "Stripe"
+	stripe.Size = UDim2.fromScale(1, 1)
+	stripe.BackgroundColor3 = Color3.new(1, 1, 1)
+	stripe.BorderSizePixel = 0
+	stripe.ZIndex = 3
+	stripe.Parent = infectionFill
+	local stripeGrad = Instance.new("UIGradient")
+	stripeGrad.Rotation = 45
+	stripeGrad.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.55),
+		NumberSequenceKeypoint.new(0.49, 0.55),
+		NumberSequenceKeypoint.new(0.5, 0.95),
+		NumberSequenceKeypoint.new(1, 0.95),
+	})
+	stripeGrad.Parent = stripe
+	RunService.Heartbeat:Connect(function(dt)
+		if infectionFrame.Visible then
+			stripeGrad.Offset = Vector2.new((stripeGrad.Offset.X + dt * 0.8) % 1, 0)
+		end
+	end)
+
 	local infectionText = Instance.new("TextLabel")
 	infectionText.BackgroundTransparency = 1
 	infectionText.Size = UDim2.fromScale(1, 1)
@@ -154,6 +179,20 @@ function RoundHudController:Init()
 	infectionText.Text = "INFECTION"
 	infectionText.ZIndex = 4
 	infectionText.Parent = infectionFrame
+
+	-- Hint line under the meter (design HUD): how to purge.
+	local infectionHint = Instance.new("TextLabel")
+	infectionHint.Name = "Hint"
+	infectionHint.BackgroundTransparency = 1
+	infectionHint.AnchorPoint = Vector2.new(0.5, 0)
+	infectionHint.Position = UDim2.fromScale(0.5, 1.25)
+	infectionHint.Size = UDim2.fromScale(1.7, 0.7)
+	infectionHint.Font = Brand.Font.Body
+	infectionHint.TextScaled = true
+	infectionHint.TextColor3 = Brand.Color.TextDim
+	infectionHint.Text = "Power a generator's CLEANSE or find a Medic to purge"
+	infectionHint.ZIndex = 3
+	infectionHint.Parent = infectionFrame
 
 	local banner = Instance.new("TextLabel")
 	banner.Name = "RoleBanner"
@@ -305,20 +344,35 @@ function RoundHudController:Init()
 				table.clear(pips)
 				for i = 1, gensTotal do
 					local pip = Instance.new("Frame")
-					pip.Size = UDim2.fromOffset(36, 16)
+					pip.Size = UDim2.fromOffset(52, 22)
 					pip.BackgroundColor3 = Brand.Color.HazardYellow
 					pip.BorderSizePixel = 0
 					pip.LayoutOrder = i
 					pip.ZIndex = 3
 					pip.Parent = pipHolder
 					local pc = Instance.new("UICorner")
-					pc.CornerRadius = UDim.new(0, 4)
+					pc.CornerRadius = UDim.new(0, 6)
 					pc.Parent = pip
+					local pl = Instance.new("TextLabel")
+					pl.Name = "L"
+					pl.BackgroundTransparency = 1
+					pl.Size = UDim2.fromScale(1, 1)
+					pl.Font = Brand.Font.Display
+					pl.TextScaled = true
+					pl.TextColor3 = Brand.Color.BgDeep
+					pl.Text = "GEN"
+					pl.ZIndex = 4
+					pl.Parent = pip
 					pips[i] = pip
 				end
 			end
 			for i, pip in pips do
-				pip.BackgroundColor3 = if i <= gensOn then Brand.Color.SafeGreen else Brand.Color.HazardYellow
+				local done = i <= gensOn
+				pip.BackgroundColor3 = if done then Brand.Color.SafeGreen else Brand.Color.HazardYellow
+				local pl = pip:FindFirstChild("L")
+				if pl and pl:IsA("TextLabel") then
+					pl.Text = if done then "\u{2713}" else "GEN"
+				end
 			end
 		end
 	end
