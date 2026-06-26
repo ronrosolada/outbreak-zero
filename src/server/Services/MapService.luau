@@ -133,7 +133,7 @@ local function buildPlatforms(parent: Folder, def: any)
 			Position = ARENA_CENTER + p.pos,
 			Color = if p.glass then def.accent else def.coverColor,
 			Material = if p.glass then Enum.Material.SmoothPlastic else Enum.Material.Metal,
-			Transparency = if p.glass then 0.4 else 0,
+			Transparency = if p.glass then 0.25 else 0,
 			Parent = parent,
 		})
 	end
@@ -168,7 +168,7 @@ local function buildDecals(parent: Folder, def: any)
 			Position = ARENA_CENTER + d.pos,
 			Color = if d.color == "accent" then def.accent else def.coverColor,
 			Material = Enum.Material.Neon,
-			Transparency = 0.1,
+			Transparency = 0, -- solid neon: avoids translucent-overlap sorting flicker
 			Shape = if d.shape == "orb" then Enum.PartType.Ball else Enum.PartType.Block,
 			Parent = parent,
 		})
@@ -180,15 +180,17 @@ end
 local function buildPerimeter(parent: Folder, def: any)
 	local size = MapConfig.SIZE
 	local half = size / 2
+	-- Inset 1.4 from the wall plane so the 0.3-deep strip sits PROUD of the inner wall
+	-- face (~109), with a clean air gap — never embedded (which z-fights the wall).
 	local strips = {
-		{ p = Vector3.new(0, 1, -half + 0.5), s = Vector3.new(size, 0.6, 0.3) },
-		{ p = Vector3.new(0, 1, half - 0.5), s = Vector3.new(size, 0.6, 0.3) },
-		{ p = Vector3.new(-half + 0.5, 1, 0), s = Vector3.new(0.3, 0.6, size) },
-		{ p = Vector3.new(half - 0.5, 1, 0), s = Vector3.new(0.3, 0.6, size) },
-		{ p = Vector3.new(0, WALL_HEIGHT - 1, -half + 0.5), s = Vector3.new(size, 0.6, 0.3) },
-		{ p = Vector3.new(0, WALL_HEIGHT - 1, half - 0.5), s = Vector3.new(size, 0.6, 0.3) },
-		{ p = Vector3.new(-half + 0.5, WALL_HEIGHT - 1, 0), s = Vector3.new(0.3, 0.6, size) },
-		{ p = Vector3.new(half - 0.5, WALL_HEIGHT - 1, 0), s = Vector3.new(0.3, 0.6, size) },
+		{ p = Vector3.new(0, 1, -half + 1.4), s = Vector3.new(size, 0.6, 0.3) },
+		{ p = Vector3.new(0, 1, half - 1.4), s = Vector3.new(size, 0.6, 0.3) },
+		{ p = Vector3.new(-half + 1.4, 1, 0), s = Vector3.new(0.3, 0.6, size) },
+		{ p = Vector3.new(half - 1.4, 1, 0), s = Vector3.new(0.3, 0.6, size) },
+		{ p = Vector3.new(0, WALL_HEIGHT - 1, -half + 1.4), s = Vector3.new(size, 0.6, 0.3) },
+		{ p = Vector3.new(0, WALL_HEIGHT - 1, half - 1.4), s = Vector3.new(size, 0.6, 0.3) },
+		{ p = Vector3.new(-half + 1.4, WALL_HEIGHT - 1, 0), s = Vector3.new(0.3, 0.6, size) },
+		{ p = Vector3.new(half - 1.4, WALL_HEIGHT - 1, 0), s = Vector3.new(0.3, 0.6, size) },
 	}
 	for _, st in strips do
 		makeDecor({
@@ -197,7 +199,7 @@ local function buildPerimeter(parent: Folder, def: any)
 			Position = ARENA_CENTER + st.p,
 			Color = def.accent,
 			Material = Enum.Material.Neon,
-			Transparency = 0.3,
+			Transparency = 0, -- solid neon line: glows + sorts stably
 			Parent = parent,
 		})
 	end
@@ -280,10 +282,10 @@ local function buildObjectiveFraming(parent: Folder, gens: { BasePart }, pad: Ba
 			makeDecor({
 				Name = "GenRing",
 				Size = Vector3.new(16, 0.3, 16),
-				Position = gen.Position - Vector3.new(0, 4.85, 0), -- flat on the floor under the gen
+				Position = gen.Position - Vector3.new(0, 4.35, 0), -- 0.5 proud of the floor (no z-fight)
 				Color = Brand.Color.HazardYellow,
 				Material = Enum.Material.Neon,
-				Transparency = 0.55,
+				Transparency = 0.2,
 				Parent = parent,
 			})
 		end
@@ -292,10 +294,10 @@ local function buildObjectiveFraming(parent: Folder, gens: { BasePart }, pad: Ba
 		makeDecor({
 			Name = "ExtractBeam",
 			Size = Vector3.new(3, 40, 3),
-			Position = pad.Position + Vector3.new(0, 20, 0),
+			Position = pad.Position + Vector3.new(0, 21, 0), -- base 0.5 above the pad top (no intersection)
 			Color = Brand.Color.SafeGreen,
 			Material = Enum.Material.Neon,
-			Transparency = 0.85,
+			Transparency = 0.6,
 			Parent = parent,
 		})
 	end
@@ -318,7 +320,7 @@ local function buildHazards(parent: Folder, def: any): { { center: Vector3, radi
 			Position = center,
 			Color = Brand.Color.InfectedPink,
 			Material = Enum.Material.Neon,
-			Transparency = 0.5,
+			Transparency = 0.35,
 			CanCollide = false, -- walk through it
 			CanQuery = false, -- and keep it out of weapon raycasts (detection is pure distance math)
 			Parent = parent,
