@@ -129,6 +129,7 @@ function RoundService:_runMatch(roster: { Player }): (string, string)
 	-- Prep: drop the roster into the arena for a brief setup window.
 	self.phase = RoundState.Prep
 	self:_placeRoster(roster, true)
+	self.map:ApplyMatchAtmosphere() -- tint lighting now the roster is in the arena (not in LoadMap, which runs in the hub)
 	for t = RoundConfig.PREP_SECONDS, 1, -1 do
 		self:_broadcast(roster, RoundState.Prep, t)
 		task.wait(1)
@@ -209,6 +210,7 @@ function RoundService:RunMatch(roster: { Player })
 
 	self.phase = RoundState.Results
 	self:_placeRoster(roster, false)
+	self.map:RestoreHubLighting() -- roster back in the hub: undo the match tint
 	for t = RoundConfig.RESULTS_SECONDS, 1, -1 do
 		self:_broadcast(roster, RoundState.Results, t)
 		task.wait(1)
