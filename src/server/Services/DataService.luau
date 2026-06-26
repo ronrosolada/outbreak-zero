@@ -17,6 +17,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config = ReplicatedStorage:WaitForChild("Config")
 local ProgressionConfig = require(Config:WaitForChild("ProgressionConfig"))
 local ContractsConfig = require(Config:WaitForChild("ContractsConfig"))
+local PassConfig = require(Config:WaitForChild("PassConfig"))
 
 local serverRoot = script.Parent.Parent
 local Persistence = require(serverRoot:WaitForChild("Lib"):WaitForChild("Persistence"))
@@ -40,6 +41,8 @@ local DEFAULT_PROFILE = {
 	stats = { rounds = 0, survivorWins = 0, infectedWins = 0 },
 	-- Daily contracts: `day` is a UTC day-number stamp; progress/claimed reset when it rolls.
 	contracts = { day = 0, progress = {}, claimed = {} },
+	-- Outbreak Pass: `season` stamps the track; progress/claims/premium reset on a new season.
+	pass = { season = "", xp = 0, premium = false, claimedFree = {}, claimedPremium = {} },
 }
 
 local DataService = {}
@@ -449,6 +452,111 @@ function DataService:ClaimContract(player: Player, id: string): boolean
 	end
 	profile.contracts.claimed[id] = true
 	self:AddCoins(player, def.reward)
+	self:SaveNow(player)
+	return true
+end
+
+-- == Outbreak Pass (season reward track) =====================================
+
+-- Reset the pass if the season rolled over (or on first load: "" ~= SEASON_ID).
+local function ensurePassSeason(profile: any)
+	if profile.pass.season ~= PassConfig.SEASON_ID then
+		profile.pass.season = PassConfig.SEASON_ID
+		profile.pass.xp = 0
+		profile.pass.premium = false
+		profile.pass.claimedFree = {}
+		profile.pass.claimedPremium = {}
+	end
+end
+
+local function passTier(xp: number): number
+	return math.min(#PassConfig.tiers, math.floor(xp / PassConfig.XP_PER_TIER))
+end
+
+function DataService:_grantPassReward(player: Player, reward: any)
+	if reward.kind == "credits" then
+		self:AddCoins(player, reward.amount)
+	elseif reward.kind == "gems" then
+		self:AddGems(player, reward.amount)
+	elseif reward.kind == "trail" then
+		self:Unlock(player, reward.id)
+	end
+end
+
+-- Snapshot of the player's pass for the client (nil if no profile yet).
+function DataService:GetPass(player: Player): any?
+	local profile = self.profiles[player]
+	if not profile then
+		return nil
+	end
+	ensurePassSeason(profile)
+	local p = profile.pass
+	return {
+		xp = p.xp,
+		tier = passTier(p.xp),
+		tierCount = #PassConfig.tiers,
+		xpPerTier = PassConfig.XP_PER_TIER,
+		premiumCost = PassConfig.PREMIUM_COST,
+		premium = p.premium == true,
+		claimedFree = p.claimedFree,
+		claimedPremium = p.claimedPremium,
+	}
+end
+
+function DataService:AddPassXp(player: Player, amount: number)
+	local profile = self.profiles[player]
+	if not profile or type(amount) ~= "number" or amount <= 0 then
+		return
+	end
+	ensurePassSeason(profile)
+	profile.pass.xp += amount
+end
+
+-- Claim a reached, unclaimed tier reward. `premium` claims the premium track (requires
+-- pass ownership). Yield-free until SaveNow, so a racing claim can't double-grant.
+function DataService:ClaimPassReward(player: Player, tier: number, premium: boolean): boolean
+	local profile = self.profiles[player]
+	if not profile or type(tier) ~= "number" then
+		return false
+	end
+	local def = PassConfig.tiers[tier]
+	if not def then
+		return false
+	end
+	ensurePassSeason(profile)
+	if tier > passTier(profile.pass.xp) then
+		return false -- tier not reached yet
+	end
+	local claimed = if premium then profile.pass.claimedPremium else profile.pass.claimedFree
+	local key = tostring(tier) -- string key: stable across DataStore (de)serialization
+	if claimed[key] then
+		return false -- already claimed
+	end
+	if premium and not profile.pass.premium then
+		return false -- premium track locked (check BEFORE marking claimed)
+	end
+	-- Set claimed BEFORE granting (matches ClaimContract) so the no-double-grant property
+	-- holds even if a grant path ever introduces a yield.
+	claimed[key] = true
+	self:_grantPassReward(player, if premium then def.premium else def.free)
+	self:SaveNow(player)
+	return true
+end
+
+-- Buy the premium track with gems (one-time per season).
+function DataService:UnlockPassPremium(player: Player): boolean
+	local profile = self.profiles[player]
+	if not profile then
+		return false
+	end
+	ensurePassSeason(profile)
+	if profile.pass.premium then
+		return false
+	end
+	if not self:TrySpendGems(player, PassConfig.PREMIUM_COST) then
+		return false
+	end
+	profile.pass.premium = true
 	self:SaveNow(player)
 	return true
 end

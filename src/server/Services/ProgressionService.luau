@@ -19,6 +19,7 @@ local ProgressionService = {}
 
 function ProgressionService:Initialize(services)
 	self.data = services.DataService
+	self.pass = services.PassService
 	self.net = require(ReplicatedStorage:WaitForChild("Net"))
 	self._claiming = {} :: { [Player]: boolean } -- in-flight daily claims (anti double-grant)
 	self._lastReq = {} :: { [Player]: number } -- per-player RequestDailyState debounce
@@ -64,6 +65,7 @@ function ProgressionService:AwardMatchResult(player: Player, role: string, infec
 
 	local xp = ProgressionConfig.XP_PARTICIPATION + (if won then ProgressionConfig.XP_WIN else 0)
 	self.data:AddXp(player, xp)
+	self.pass:AddXp(player, xp) -- Outbreak Pass progresses off the same match XP
 
 	local profile = self.data:GetProfile(player)
 	if profile then

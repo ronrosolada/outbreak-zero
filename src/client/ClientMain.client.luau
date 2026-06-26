@@ -48,3 +48,6 @@ ContractsController:Init()
 
 local CurrencyController = require(controllers:WaitForChild("CurrencyController"))
 CurrencyController:Init()
+
+local PassController = require(controllers:WaitForChild("PassController"))
+PassController:Init()

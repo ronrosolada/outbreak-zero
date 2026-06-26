@@ -36,6 +36,10 @@ local REMOTE_NAMES = {
 	"ContractsState", -- server -> client: daily-contract snapshot (list of {id,desc,target,reward,progress,claimed})
 	"RequestContracts", -- client -> server: "send me my current daily contracts"
 	"ClaimContract", -- client -> server: claim a completed contract's reward by id
+	"PassState", -- server -> client: Outbreak Pass snapshot (xp, tier, premium, claimed maps)
+	"RequestPass", -- client -> server: "send me my current pass state"
+	"ClaimPassReward", -- client -> server: claim a tier reward (tier, isPremium)
+	"UnlockPassPremium", -- client -> server: buy the premium track with gems
 }
 
 local remotesFolder = ReplicatedStorage:WaitForChild("Remotes")

@@ -19,6 +19,7 @@ local servicesFolder = ServerScriptService:WaitForChild("Services")
 local SERVICE_ORDER = {
 	"DataService", -- persistence first: profiles must be loadable before anything pays out
 	"ContractsService", -- daily-contract coordinator (depends on DataService)
+	"PassService", -- Outbreak Pass coordinator (depends on DataService)
 	"MapService",
 	"TeamManager",
 	"EconomyService",
@@ -86,6 +87,7 @@ Players.PlayerRemoving:Connect(function(player)
 	services.PingService:OnPlayerRemoving(player)
 	services.HazardService:OnPlayerRemoving(player)
 	services.ContractsService:OnPlayerRemoving(player)
+	services.PassService:OnPlayerRemoving(player)
 	services.StoreService:OnPlayerRemoving(player)
 	services.StatsService:OnPlayerRemoving(player)
 	services.ProgressionService:OnPlayerRemoving(player)
