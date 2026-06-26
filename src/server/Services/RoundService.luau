@@ -65,6 +65,12 @@ function RoundService:OnPlayerRemoving(player: Player)
 	end
 end
 
+-- Current match phase (Hub / Prep / Action / Results). Used by ClassService to gate
+-- class changes to hub + Prep only.
+function RoundService:GetPhase(): string
+	return self.phase
+end
+
 -- == Match helpers ===========================================================
 
 function RoundService:_broadcast(roster: { Player }, phase: string, timeLeft: number)
@@ -109,9 +115,9 @@ end
 
 -- == Run one match ===========================================================
 
--- Prep + Action. Returns whether the infected won. Wrapped by RunMatch in a
--- pcall so a mid-match error can't strand players or wedge the matchmaker.
-function RoundService:_runMatch(roster: { Player }): boolean
+-- Prep + Action. Returns the match result: "survivor" | "infected" | "aborted".
+-- Wrapped by RunMatch in a pcall so a mid-match error can't strand players.
+function RoundService:_runMatch(roster: { Player }): string
 	-- Pick a fresh arena for this match (random rotation), THEN drop the roster in.
 	self.map:LoadRandomMap()
 	self.stats:StartMatch(roster)
@@ -131,24 +137,25 @@ function RoundService:_runMatch(roster: { Player }): boolean
 	for t = RoundConfig.ACTION_SECONDS, 1, -1 do
 		self:_broadcast(roster, RoundState.Action, t)
 		if self.objectives:IsExtractionComplete() then
-			return false -- survivors powered up and escaped through extraction: survivors win
+			return "survivor" -- powered up + escaped through extraction
 		end
 		local survivors = self.infection:GetSurvivorCount()
 		local infected = self.infection:GetInfectedCount()
 		if infected <= 0 then
-			return false -- all infected left: survivors win, no dead air
+			return "survivor" -- all infected left: no dead air
 		end
 		if survivors <= 0 then
-			-- a real infected win only if survivors were actually tagged (not a walkover)
-			return self.infection:GetConversions() > 0
+			-- Survivors gone: a real infected win ONLY if someone was actually tagged.
+			-- If everyone just LEFT with zero conversions, it's a no-contest abort.
+			return if self.infection:GetConversions() > 0 then "infected" else "aborted"
 		end
 		task.wait(1)
 	end
 	-- Final boundary: extraction may have completed during the last second's wait.
 	if self.objectives:IsExtractionComplete() then
-		return false
+		return "survivor"
 	end
-	return true -- timer expired without extraction: the clock favors the infected
+	return "infected" -- timer expired without extraction: the clock favors the infected
 end
 
 -- Blocks until the match is over. Cleanup ALWAYS runs, even if _runMatch errors.
@@ -160,26 +167,39 @@ function RoundService:RunMatch(roster: { Player })
 	local ok, result = pcall(function()
 		return self:_runMatch(roster)
 	end)
-	local infectedWin = ok and result == true
 	if not ok then
 		warn("[RoundService] match error: " .. tostring(result))
+		result = "aborted"
 	end
 
-	-- Resolve: pay out + read commendations (both read roles) BEFORE clearing them.
-	self:_payout(roster, infectedWin)
-	local awards, perPlayer = self.stats:BuildResults(roster)
-	self.infection:EndRound(roster)
-	self.objectives:EndObjectives()
+	if result == "aborted" then
+		-- No real contest (everyone left / mid-match error): clean up, no payout, neutral notice.
+		self.infection:EndRound(roster)
+		self.objectives:EndObjectives()
+		for _, player in roster do
+			if player.Parent then
+				self.net.Notify:FireClient(player, "Match ended — no result.")
+			end
+		end
+	else
+		local infectedWin = result == "infected"
+		-- Resolve: pay out + read commendations (both read roles) BEFORE clearing them.
+		self:_payout(roster, infectedWin)
+		local awards, perPlayer = self.stats:BuildResults(roster)
+		self.infection:EndRound(roster)
+		self.objectives:EndObjectives()
 
-	-- Results: announce + the results/commendations panel, then back to the hub.
-	local message = if infectedWin then "The Infected win!" else "The Survivors win!"
-	for _, player in roster do
-		if player.Parent then
-			self.net.Notify:FireClient(player, message)
-			local mine = perPlayer[player] or { generators = 0, rescues = 0, survived = false }
-			self.net.MatchResults:FireClient(player, infectedWin, awards, mine)
+		-- Results: announce + the results/commendations panel.
+		local message = if infectedWin then "The Infected win!" else "The Survivors win!"
+		for _, player in roster do
+			if player.Parent then
+				self.net.Notify:FireClient(player, message)
+				local mine = perPlayer[player] or { generators = 0, rescues = 0, survived = false }
+				self.net.MatchResults:FireClient(player, infectedWin, awards, mine)
+			end
 		end
 	end
+
 	self.phase = RoundState.Results
 	self:_placeRoster(roster, false)
 	for t = RoundConfig.RESULTS_SECONDS, 1, -1 do

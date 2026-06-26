@@ -209,8 +209,17 @@ function CombatService:_useWeapon(player: Player, kind, direction)
 	if not equipped or equipped:GetAttribute("WeaponKind") ~= kind then
 		return
 	end
-	if kind == "Ranged" and (typeof(direction) ~= "Vector3" or direction.Magnitude < 0.01) then
-		return -- validate aim BEFORE consuming the cooldown slot
+	if kind == "Ranged" then
+		-- Validate aim BEFORE consuming the cooldown slot. Free-aim from the server-known
+		-- origin is intended (the body doesn't face the camera); we only reject malformed
+		-- vectors — a NaN/inf component makes Magnitude NaN, and a zero/near-zero direction.
+		if typeof(direction) ~= "Vector3" then
+			return
+		end
+		local mag = direction.Magnitude
+		if mag ~= mag or mag < 0.01 then
+			return
+		end
 	end
 
 	local now = os.clock()

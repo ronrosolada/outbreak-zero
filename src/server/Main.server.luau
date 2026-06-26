@@ -83,6 +83,7 @@ Players.PlayerRemoving:Connect(function(player)
 	services.PingService:OnPlayerRemoving(player)
 	services.StoreService:OnPlayerRemoving(player)
 	services.StatsService:OnPlayerRemoving(player)
+	services.ProgressionService:OnPlayerRemoving(player)
 	services.ClassService:OnPlayerRemoving(player)
 	services.DataService:OnPlayerRemoving(player) -- save last, after other services finish writing
 end)

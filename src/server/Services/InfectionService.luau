@@ -367,15 +367,24 @@ function InfectionService:_onCharacterAdded(player: Player)
 	char:WaitForChild("Humanoid", 5)
 	char:WaitForChild("HumanoidRootPart", 5)
 
-	-- Fresh body (e.g. a manual reset) clears any downed state so they can't get stuck.
-	if self.downed[player] then
+	local wasDowned = self.downed[player] == true
+	-- Clear downed state off the old body onto the fresh one.
+	if wasDowned then
 		self.downed[player] = nil
 		self.downedSince[player] = nil
 		self:_removePrompt(player)
 		player:SetAttribute("Downed", false)
 	end
+
 	if self.roundActive and self.roles[player] == GameConfig.ROLE_SURVIVOR then
-		-- Start the fresh body clean — otherwise a stale ~100 meter would instantly re-down them.
+		if wasDowned then
+			-- Reset-to-escape guard: a survivor who respawns while DOWNED mid-round (e.g.
+			-- hit Roblox's Reset Character to dodge bleed-out) is CONVERTED, not handed a
+			-- fresh clean body + immunity. Resetting while down = you went down.
+			self:_convert(player)
+			return
+		end
+		-- Benign respawn (was not downed): start clean so a stale ~100 meter can't re-down them.
 		self:_setInfection(player, 0)
 		self.lastContact[player] = nil
 		self.immuneUntil[player] = os.clock() + InfectionConfig.SPAWN_IMMUNITY

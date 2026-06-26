@@ -171,6 +171,9 @@ end
 
 function StoreService:Start()
 	self.net.RequestStore.OnServerEvent:Connect(function(player)
+		if self:_throttled(player) then
+			return -- light per-player debounce against request spam
+		end
 		task.spawn(function()
 			self.data:WaitForProfile(player)
 			self:_sendState(player)

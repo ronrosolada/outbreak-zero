@@ -21,6 +21,12 @@ function ProgressionService:Initialize(services)
 	self.data = services.DataService
 	self.net = require(ReplicatedStorage:WaitForChild("Net"))
 	self._claiming = {} :: { [Player]: boolean } -- in-flight daily claims (anti double-grant)
+	self._lastReq = {} :: { [Player]: number } -- per-player RequestDailyState debounce
+end
+
+function ProgressionService:OnPlayerRemoving(player: Player)
+	self._claiming[player] = nil
+	self._lastReq[player] = nil
 end
 
 function ProgressionService:Start()
@@ -35,6 +41,11 @@ function ProgressionService:Start()
 	end)
 	-- Client asks for its daily state once its HUD is ready (mirrors RequestHubState).
 	self.net.RequestDailyState.OnServerEvent:Connect(function(player)
+		local now = os.clock()
+		if self._lastReq[player] and now - self._lastReq[player] < 0.5 then
+			return -- light per-player debounce against request spam
+		end
+		self._lastReq[player] = now
 		task.spawn(function()
 			if self.data:WaitForProfile(player) then
 				self:_sendDailyState(player)

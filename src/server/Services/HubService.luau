@@ -24,9 +24,11 @@ function HubService:Initialize(services)
 	self.map = services.MapService
 	self.round = services.RoundService
 	self.net = require(ReplicatedStorage:WaitForChild("Net"))
-	self.queue = {} :: { [Player]: boolean }
+	self.queue = {} :: { [Player]: boolean } -- membership set (fast dedupe + removal test)
+	self._queueOrder = {} :: { Player } -- insertion order, so overflow selection is FIFO-fair
 	self.matchRunning = false
 	self._countdown = nil :: number? -- seconds left in the queue-fill countdown (nil when idle)
+	self._lastReq = {} :: { [Player]: number } -- per-player RequestHubState debounce
 
 	-- Attach the queue-pad prompt.
 	local pad = self.map.queuePad
@@ -47,6 +49,11 @@ function HubService:Initialize(services)
 	-- Late joiners ask for the current hub state once their client is ready
 	-- (avoids the FireAllClients-vs-client-setup race on join).
 	self.net.RequestHubState.OnServerEvent:Connect(function(player)
+		local now = os.clock()
+		if self._lastReq[player] and now - self._lastReq[player] < 0.5 then
+			return -- light per-player debounce against request spam
+		end
+		self._lastReq[player] = now
 		self.net.HubStateChanged:FireClient(
 			player,
 			self:_queueCount(),
@@ -74,11 +81,20 @@ function HubService:_broadcast()
 	)
 end
 
--- Everyone currently queued who is still in the server.
+-- Remove a player from the queue (both the membership set and the order list).
+function HubService:_unqueue(player: Player)
+	self.queue[player] = nil
+	local i = table.find(self._queueOrder, player)
+	if i then
+		table.remove(self._queueOrder, i)
+	end
+end
+
+-- Everyone currently queued who is still in the server, in JOIN ORDER.
 function HubService:_liveRoster(): { Player }
 	local roster = {}
-	for player in self.queue do
-		if player.Parent then
+	for _, player in self._queueOrder do
+		if self.queue[player] and player.Parent then
 			table.insert(roster, player)
 		end
 	end
@@ -90,10 +106,11 @@ function HubService:_toggleQueue(player: Player)
 		return -- can't queue while already in a match
 	end
 	if self.queue[player] then
-		self.queue[player] = nil
+		self:_unqueue(player)
 		player:SetAttribute("Queued", false)
 	else
 		self.queue[player] = true
+		table.insert(self._queueOrder, player)
 		player:SetAttribute("Queued", true)
 	end
 	self:_broadcast()
@@ -105,7 +122,8 @@ function HubService:OnPlayerAdded(player: Player)
 end
 
 function HubService:OnPlayerRemoving(player: Player)
-	self.queue[player] = nil
+	self:_unqueue(player)
+	self._lastReq[player] = nil
 	self:_broadcast()
 end
 
@@ -190,7 +208,7 @@ function HubService:_matchmakeTick()
 	-- Commit: pull them from the queue and LOCK them in (InMatch set BEFORE the
 	-- spectacle so they can't re-queue during its yield).
 	for _, player in roster do
-		self.queue[player] = nil
+		self:_unqueue(player)
 		player:SetAttribute("Queued", false)
 		player:SetAttribute("InMatch", true)
 	end

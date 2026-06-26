@@ -107,6 +107,7 @@ function DataService:Initialize()
 	self.net = require(ReplicatedStorage:WaitForChild("Net"))
 	self.profiles = {} :: { [Player]: any }
 	self._ready = {} :: { [Player]: boolean } -- true once the durable load finished
+	self._failed = {} :: { [Player]: boolean } -- true if the durable load failed (read-only session)
 	self._active = {} :: { [Player]: boolean } -- true between join and leave; guards late loads
 	self._boundToClose = false
 end
@@ -178,6 +179,7 @@ function DataService:OnPlayerAdded(player: Player)
 			-- existing cloud data with defaults. Tell the player so vanished rewards
 			-- this session aren't mistaken for a bug.
 			warn(("[DataService] could not load %s; running read-only this session (no save)."):format(player.Name))
+			self._failed[player] = true -- terminal: WaitForProfile must stop waiting (no profile will arrive)
 			self.net.Notify:FireClient(
 				player,
 				"⚠️ Couldn't load your save — progress won't be kept this session. Rejoin to try again."
@@ -206,6 +208,7 @@ function DataService:OnPlayerRemoving(player: Player)
 		self.profiles[player] = nil
 	end
 	self._ready[player] = nil
+	self._failed[player] = nil
 end
 
 -- Yields until this player's durable data has loaded (or they leave). Returns
@@ -213,7 +216,9 @@ end
 -- that must reflect the SAVE (e.g. daily-reward timers), not the placeholder
 -- defaults shown during the brief load window.
 function DataService:WaitForProfile(player: Player): any?
-	while player.Parent and not self._ready[player] do
+	-- Returns the loaded profile, or nil if the player left OR the durable load failed
+	-- (read-only session). The _failed guard stops this from spinning forever on an outage.
+	while player.Parent and not self._ready[player] and not self._failed[player] do
 		task.wait(0.1)
 	end
 	return self.profiles[player]

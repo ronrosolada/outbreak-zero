@@ -12,11 +12,13 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config = ReplicatedStorage:WaitForChild("Config")
 local GameConfig = require(Config:WaitForChild("GameConfig"))
 local ClassConfig = require(Config:WaitForChild("ClassConfig"))
+local RoundState = require(ReplicatedStorage:WaitForChild("Round"):WaitForChild("RoundState"))
 
 local ClassService = {}
 
 function ClassService:Initialize(services)
 	self.data = services.DataService
+	self.round = services.RoundService
 	self.net = require(ReplicatedStorage:WaitForChild("Net"))
 	self.humanClass = {} :: { [Player]: string }
 	self.infectedClass = {} :: { [Player]: string }
@@ -47,6 +49,13 @@ function ClassService:SetClass(player: Player, classId)
 	local def = ClassConfig.classes[classId]
 	if not def then
 		return -- unknown class id
+	end
+	-- No swapping class mid-match: allowed in the hub (not InMatch) or during Prep, but
+	-- locked once the round is live (Action/Results). Gate on the PLAYER'S own match
+	-- state so hub players can still repick while a different match runs elsewhere.
+	if player:GetAttribute("InMatch") and self.round:GetPhase() ~= RoundState.Prep then
+		self.net.Notify:FireClient(player, "You can't change class mid-match.")
+		return
 	end
 	-- Locked classes must be bought in the shop first (server-authoritative gate).
 	if (def.unlockCost or 0) > 0 and not self.data:IsUnlocked(player, classId) then
