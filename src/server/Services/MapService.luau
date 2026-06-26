@@ -27,6 +27,24 @@ local WALL_HEIGHT = 25
 local ARENA_CENTER = Vector3.new(0, 0, 0)
 local HUB_CENTER = Vector3.new(0, 0, 600) -- well clear of the arena
 
+-- Design "blockout" maps are 220(W) x 160(D), local top-left origin (X0 Z0, +X right,
+-- +Z down). Convert a local (x,z) to centered arena space (and pin y).
+local BLOCKOUT_W, BLOCKOUT_D = 220, 160
+local function blockoutToArena(x: number, z: number, y: number): Vector3
+	return ARENA_CENTER + Vector3.new(x - BLOCKOUT_W / 2, y, z - BLOCKOUT_D / 2)
+end
+
+local MATERIALS: { [string]: Enum.Material } = {
+	Neon = Enum.Material.Neon,
+	Metal = Enum.Material.Metal,
+	Concrete = Enum.Material.Concrete,
+	Plastic = Enum.Material.Plastic,
+	SmoothPlastic = Enum.Material.SmoothPlastic,
+}
+local function materialFrom(name: string?): Enum.Material
+	return (name and MATERIALS[name]) or Enum.Material.SmoothPlastic
+end
+
 local function makePart(props: { [string]: any }): Part
 	local part = Instance.new("Part")
 	part.Anchored = true
@@ -330,6 +348,189 @@ local function buildHazards(parent: Folder, def: any): { { center: Vector3, radi
 	return zones
 end
 
+-- Scatter `count` spawn CFrames in a grid across a rectangular footprint (survivor plaza).
+local function scatterSpawns(centerArena: Vector3, sizeX: number, sizeZ: number, count: number): { CFrame }
+	local out = {}
+	local cols = math.max(1, math.ceil(math.sqrt(count)))
+	local rows = math.max(1, math.ceil(count / cols))
+	for r = 1, rows do
+		for c = 1, cols do
+			local x = centerArena.X - sizeX / 2 + (sizeX / (cols + 1)) * c
+			local z = centerArena.Z - sizeZ / 2 + (sizeZ / (rows + 1)) * r
+			table.insert(out, CFrame.new(Vector3.new(x, centerArena.Y + 5, z)))
+		end
+	end
+	return out
+end
+
+-- Builds a design "blockout" map (local-origin part tables). Returns
+-- (generators, extractPad, hazardZones, spawnCFrames) like the centered pipeline so the
+-- public getters + RoundService/ObjectiveService work unchanged.
+local function buildBlockout(parent: Folder, def: any): ({ BasePart }, BasePart, { any }, { CFrame })
+	-- Base floor under everything so gaps between structures aren't void.
+	makePart({
+		Name = "Floor",
+		Size = Vector3.new(BLOCKOUT_W, 2, BLOCKOUT_D),
+		Position = ARENA_CENTER + Vector3.new(0, -1, 0),
+		Color = def.floorColor,
+		Material = Enum.Material.Concrete,
+		Parent = parent,
+	})
+
+	local hw, hd = BLOCKOUT_W / 2, BLOCKOUT_D / 2
+	local walls = {
+		{ s = Vector3.new(BLOCKOUT_W, WALL_HEIGHT, 2), o = Vector3.new(0, WALL_HEIGHT / 2, -hd) },
+		{ s = Vector3.new(BLOCKOUT_W, WALL_HEIGHT, 2), o = Vector3.new(0, WALL_HEIGHT / 2, hd) },
+		{ s = Vector3.new(2, WALL_HEIGHT, BLOCKOUT_D), o = Vector3.new(-hw, WALL_HEIGHT / 2, 0) },
+		{ s = Vector3.new(2, WALL_HEIGHT, BLOCKOUT_D), o = Vector3.new(hw, WALL_HEIGHT / 2, 0) },
+	}
+	for _, w in walls do
+		makePart({
+			Name = "Wall",
+			Size = w.s,
+			Position = ARENA_CENTER + w.o,
+			Color = def.wallColor or def.accent,
+			Material = Enum.Material.Metal,
+			Parent = parent,
+		})
+	end
+
+	-- Tallest block-part top covering (x,z), so generators/pad rest ON a slab instead of
+	-- intersecting it (everything is placed base-at-y=0). Cylinders (carousel/ferris) ignored.
+	local function floorHeightAt(x: number, z: number): number
+		local top = 0
+		for _, pt in def.parts do
+			if
+				pt.shape ~= "Cylinder"
+				and math.abs(x - pt.center[1]) <= pt.size[1] / 2
+				and math.abs(z - pt.center[2]) <= pt.size[2] / 2
+			then
+				top = math.max(top, pt.height)
+			end
+		end
+		return top
+	end
+
+	for _, pt in def.parts do
+		local cx, cz = pt.center[1], pt.center[2]
+		local pos = blockoutToArena(cx, cz, pt.height / 2)
+		local props: { [string]: any } = {
+			Name = pt.name,
+			Color = Color3.fromHex(pt.color),
+			Material = materialFrom(pt.material),
+			Parent = parent,
+		}
+		if pt.shape == "Cylinder" then
+			-- Vertical disc: the cylinder's axis (local X) becomes the height; Y/Z are diameters.
+			props.Shape = Enum.PartType.Cylinder
+			props.Size = Vector3.new(pt.height, pt.size[1], pt.size[2])
+			props.CFrame = CFrame.new(pos) * CFrame.Angles(0, 0, math.rad(90))
+		else
+			props.Size = Vector3.new(pt.size[1], pt.height, pt.size[2])
+			props.Position = pos
+		end
+		-- Friction is a property of the PART (only the bumper floor declares it) — not a
+		-- center-in-zone test, so an unrelated prop standing in the zone isn't made slippery.
+		if pt.friction then
+			props.CustomPhysicalProperties = PhysicalProperties.new(0.7, pt.friction, 0.5)
+		end
+		makePart(props)
+	end
+
+	-- Generators at the 3 objective nodes.
+	local generators = {}
+	for i, o in def.objectives do
+		local gen = makePart({
+			Name = "Generator" .. i,
+			Size = Vector3.new(8, 10, 8),
+			Position = blockoutToArena(o[1], o[2], floorHeightAt(o[1], o[2]) + 5),
+			Color = Brand.Color.HazardYellow,
+			Material = Enum.Material.Neon,
+			Transparency = 0.1,
+			Parent = parent,
+		})
+		local light = Instance.new("PointLight")
+		light.Color = Brand.Color.HazardYellow
+		light.Brightness = 4
+		light.Range = 26
+		light.Enabled = false
+		light.Parent = gen
+		generators[i] = gen
+	end
+
+	local pad = makePart({
+		Name = "ExtractPad",
+		Size = Vector3.new(18, 1, 18),
+		Position = blockoutToArena(
+			def.extraction[1],
+			def.extraction[2],
+			floorHeightAt(def.extraction[1], def.extraction[2]) + 0.5
+		),
+		Color = Brand.Color.Panel,
+		Material = Enum.Material.Neon,
+		Transparency = 0.3,
+		CanQuery = false,
+		Parent = parent,
+	})
+	local padLight = Instance.new("PointLight")
+	padLight.Name = "PadLight"
+	padLight.Color = Brand.Color.SafeGreen
+	padLight.Brightness = 6
+	padLight.Range = 50
+	padLight.Enabled = false
+	padLight.Parent = pad
+
+	-- Passive hazard zones (Goo/Slow/Electrified): flat neon footprint + a fill zone.
+	-- Dynamic kinds (Knockback carousel, MovingHazard train) are handled by HazardService.
+	local zones = {}
+	for _, h in def.hazards do
+		if h.kind == "Goo" or h.kind == "Slow" or h.kind == "Electrified" then
+			local center = blockoutToArena(h.center[1], h.center[2], 0.2)
+			local color = Brand.Color.InfectedPink
+			if h.kind == "Slow" then
+				color = Brand.Color.HumanBlue
+			elseif h.kind == "Electrified" then
+				color = Brand.Color.HazardYellow
+			end
+			makePart({
+				Name = "Hazard_" .. h.name,
+				Size = Vector3.new(h.size[1], 0.4, h.size[2]),
+				Position = center,
+				Color = color,
+				Material = Enum.Material.Neon,
+				Transparency = 0.4,
+				CanCollide = false,
+				CanQuery = false,
+				Parent = parent,
+			})
+			table.insert(zones, {
+				shape = "box",
+				center = center,
+				sizeX = h.size[1],
+				sizeZ = h.size[2],
+				kind = h.kind,
+				fill = h.infectionPerSec,
+				slowMult = h.walkSpeedMult,
+			})
+		end
+	end
+
+	-- Spawn scatter over the survivor plaza part.
+	local spawns = {}
+	for _, pt in def.parts do
+		if pt.name == def.survivorSpawn then
+			local c = blockoutToArena(pt.center[1], pt.center[2], 0)
+			spawns = scatterSpawns(c, math.max(8, pt.size[1] - 6), math.max(8, pt.size[2] - 6), 8)
+			break
+		end
+	end
+	if #spawns == 0 then
+		spawns = { CFrame.new(ARENA_CENTER + Vector3.new(0, 5, 0)) }
+	end
+
+	return generators, pad, zones, spawns
+end
+
 -- == Persistent hub ==========================================================
 
 local function buildHub(parent: Folder): (BasePart, PointLight)
@@ -483,12 +684,9 @@ function MapService:_warnSpawnOverlaps(def: any)
 	end
 end
 
--- Rebuilds the arena (keeping the persistent hub) from a map definition.
+-- Rebuilds the arena (keeping the persistent hub) from a map definition. Supports two
+-- formats: the centered enrichment maps and the design "blockout" part-table maps.
 function MapService:LoadMap(def: any)
-	assert(
-		#def.generators == ObjectiveConfig.GEN_COUNT,
-		("MapConfig '%s' must define exactly %d generators"):format(def.name, ObjectiveConfig.GEN_COUNT)
-	)
 	local old = self.mapFolder:FindFirstChild("Arena")
 	if old then
 		old:Destroy()
@@ -496,26 +694,39 @@ function MapService:LoadMap(def: any)
 	local arena = Instance.new("Folder")
 	arena.Name = "Arena"
 
-	buildArena(arena, def)
-	buildPlatforms(arena, def)
-	buildRamps(arena, def)
-	local gens, pad = buildObjectives(arena, def)
-	buildObjectiveFraming(arena, gens, pad)
-	local zones = buildHazards(arena, def)
-	buildDecor(arena, def)
-	arena.Parent = self.mapFolder
+	local gens, pad, zones, spawns
+	if def.format == "blockout" then
+		assert(
+			#def.objectives == ObjectiveConfig.GEN_COUNT,
+			("MapConfig '%s' must define exactly %d objectives"):format(def.name, ObjectiveConfig.GEN_COUNT)
+		)
+		gens, pad, zones, spawns = buildBlockout(arena, def)
+		buildObjectiveFraming(arena, gens, pad)
+	else
+		assert(
+			#def.generators == ObjectiveConfig.GEN_COUNT,
+			("MapConfig '%s' must define exactly %d generators"):format(def.name, ObjectiveConfig.GEN_COUNT)
+		)
+		buildArena(arena, def)
+		buildPlatforms(arena, def)
+		buildRamps(arena, def)
+		gens, pad = buildObjectives(arena, def)
+		buildObjectiveFraming(arena, gens, pad)
+		zones = buildHazards(arena, def)
+		buildDecor(arena, def)
+		spawns = {}
+		for _, p in def.spawns do
+			table.insert(spawns, CFrame.new(ARENA_CENTER + p + Vector3.new(0, 5, 0)))
+		end
+		self:_warnSpawnOverlaps(def)
+	end
 
+	arena.Parent = self.mapFolder
 	self.generators = gens
 	self.extractPad = pad
 	self.hazards = zones
 	self.currentMap = def
-
-	self.arenaSpawns = {}
-	for _, p in def.spawns do
-		table.insert(self.arenaSpawns, CFrame.new(ARENA_CENTER + p + Vector3.new(0, 5, 0)))
-	end
-
-	self:_warnSpawnOverlaps(def)
+	self.arenaSpawns = spawns
 	self.mapFolder:SetAttribute("MapName", def.name)
 end
 
@@ -537,10 +748,14 @@ function MapService:LoadRandomMap(): any
 end
 
 -- True if a position is inside any active contamination zone (horizontal test).
+-- Supports circular (centered maps: radius) and box (blockout maps: sizeX/sizeZ) zones.
 function MapService:InHazard(pos: Vector3): boolean
 	for _, z in self.hazards do
-		local d = Vector3.new(pos.X - z.center.X, 0, pos.Z - z.center.Z).Magnitude
-		if d <= z.radius then
+		if z.shape == "box" then
+			if math.abs(pos.X - z.center.X) <= z.sizeX / 2 and math.abs(pos.Z - z.center.Z) <= z.sizeZ / 2 then
+				return true
+			end
+		elseif (Vector3.new(pos.X - z.center.X, 0, pos.Z - z.center.Z)).Magnitude <= z.radius then
 			return true
 		end
 	end
