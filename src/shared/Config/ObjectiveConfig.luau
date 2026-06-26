@@ -17,7 +17,11 @@ local ObjectiveConfig = {
 	-- Extraction finale (the central pad, armed once all generators are powered).
 	-- The pad's world position comes from MapConfig.EXTRACT_CENTER (per map).
 	EXTRACT_RANGE = 12, -- horizontal studs from center counted as "on the pad"
-	EXTRACT_ABANDON_RANGE = 75, -- survivors farther than this don't gate the hold (no lone-straggler lock)
+	EXTRACT_ABANDON_RANGE = 75, -- survivors farther than this don't gate the hold at all
+	-- Fraction of the present (within-abandon) survivors that must be ON the pad for the
+	-- hold to progress. 0.5 = a simple majority, so a single straggler/AFK in the
+	-- 12..75-stud band can never hard-lock the team (even in a 2-survivor match: ceil(2*0.5)=1).
+	EXTRACT_REQUIRED_FRACTION = 0.5,
 	EXTRACT_HOLD_SECONDS = 8, -- continuous all-aboard seconds to escape (progress = 100/this per sec)
 	EXTRACT_DECAY = 20, -- progress %/sec lost when not all-aboard (non-punishing, no instant reset)
 

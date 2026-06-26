@@ -22,6 +22,7 @@ local Persistence = require(serverRoot:WaitForChild("Lib"):WaitForChild("Persist
 
 local STORE_NAME = "PlayerData_v1"
 local AUTOSAVE_INTERVAL = 120 -- seconds between background saves
+local MAX_COIN_AWARD = 1000000 -- defensive cap: a single AddCoins grant can never exceed this
 
 -- Fresh-account data. `reconcile` fills any keys missing from older saves, so
 -- this template can grow over time without wiping existing players.
@@ -244,6 +245,13 @@ function DataService:GetCoins(player: Player): number
 end
 
 function DataService:AddCoins(player: Player, amount: number)
+	-- Defense-in-depth: AddCoins only ever GRANTS a sane positive amount (spending goes
+	-- through TrySpend). Reject NaN / non-positive / absurd values so a config typo or
+	-- overflow can't silently corrupt a balance.
+	if type(amount) ~= "number" or amount ~= amount or amount <= 0 or amount > MAX_COIN_AWARD then
+		warn(("[DataService] rejected AddCoins for %s: %s"):format(player.Name, tostring(amount)))
+		return
+	end
 	local profile = self.profiles[player]
 	if not profile then
 		return

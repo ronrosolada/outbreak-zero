@@ -512,6 +512,9 @@ end
 -- every DOWNED survivor (same as a rescue) and knocks `relief` infection off every
 -- standing survivor, granting brief immunity to all. Only rewrites existing self.roles
 -- VALUES indirectly — never adds/removes keys — so it's safe vs the _tick iteration.
+-- SAFETY INVARIANT: this fires from a ProximityPrompt handler, i.e. BETWEEN ticks — which
+-- holds ONLY because _tick and ObjectiveService:Tick are entirely yield-free. Do NOT add
+-- task.wait / async calls inside those tick paths, or this becomes a real mid-iteration race.
 function InfectionService:CleansePulse(relief: number, immunitySeconds: number)
 	for player, role in self.roles do
 		if role ~= GameConfig.ROLE_SURVIVOR or not player.Parent then

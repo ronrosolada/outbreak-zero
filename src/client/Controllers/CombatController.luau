@@ -105,6 +105,10 @@ function CombatController:Init()
 
 	-- == Crosshair (visible while a ranged weapon is equipped) =================
 	RunService.RenderStepped:Connect(function()
+		if player:GetAttribute("InMatch") ~= true then
+			crosshair.Visible = false
+			return -- no per-frame tool scan while in the hub
+		end
 		local char = player.Character
 		local equipped = char and char:FindFirstChildOfClass("Tool")
 		crosshair.Visible = equipped ~= nil and equipped:GetAttribute("WeaponKind") == "Ranged"

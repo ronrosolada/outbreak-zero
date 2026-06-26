@@ -136,6 +136,7 @@ function AbilityService:_fragGrenade(player: Player, def, direction)
 		explosion.BlastPressure = 0 -- visual + sound only, no physics knockback
 		explosion.DestroyJointRadiusPercent = 0
 		explosion.Parent = Workspace
+		Debris:AddItem(explosion, 1) -- explicit cleanup (don't rely on Roblox's implicit Explosion GC)
 		for _, target in Players:GetPlayers() do
 			if self.infection:GetRole(target) == GameConfig.ROLE_INFECTED then
 				local thrp = getRoot(target)

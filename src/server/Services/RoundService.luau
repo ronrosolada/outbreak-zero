@@ -28,6 +28,7 @@ function RoundService:Initialize(services)
 	self.progression = services.ProgressionService
 	self.objectives = services.ObjectiveService
 	self.stats = services.StatsService
+	self.data = services.DataService
 	self.net = require(ReplicatedStorage:WaitForChild("Net"))
 	self.phase = RoundState.Hub
 	self._arenaCounter = 0
@@ -100,6 +101,10 @@ end
 function RoundService:_payout(roster: { Player }, infectedWin: boolean)
 	for _, player in roster do
 		if player.Parent then
+			-- Make sure a slow DataStore load has finished, so coins/XP/stats actually
+			-- land instead of silently no-opping on a not-yet-loaded profile (C3). Returns
+			-- promptly if the load already failed (read-only session).
+			self.data:WaitForProfile(player)
 			local role = self.infection:GetRole(player)
 			self.economy:AddCoins(player, GameConfig.REWARD_PARTICIPATION)
 			if infectedWin and role == GameConfig.ROLE_INFECTED then
@@ -117,7 +122,7 @@ end
 
 -- Prep + Action. Returns the match result: "survivor" | "infected" | "aborted".
 -- Wrapped by RunMatch in a pcall so a mid-match error can't strand players.
-function RoundService:_runMatch(roster: { Player }): string
+function RoundService:_runMatch(roster: { Player }): (string, string)
 	-- Pick a fresh arena for this match (random rotation), THEN drop the roster in.
 	self.map:LoadRandomMap()
 	self.stats:StartMatch(roster)
@@ -137,25 +142,28 @@ function RoundService:_runMatch(roster: { Player }): string
 	for t = RoundConfig.ACTION_SECONDS, 1, -1 do
 		self:_broadcast(roster, RoundState.Action, t)
 		if self.objectives:IsExtractionComplete() then
-			return "survivor" -- powered up + escaped through extraction
+			return "survivor", "The survivors escaped through extraction!"
 		end
 		local survivors = self.infection:GetSurvivorCount()
 		local infected = self.infection:GetInfectedCount()
 		if infected <= 0 then
-			return "survivor" -- all infected left: no dead air
+			return "survivor", "The infected fled — survivors win!"
 		end
 		if survivors <= 0 then
 			-- Survivors gone: a real infected win ONLY if someone was actually tagged.
 			-- If everyone just LEFT with zero conversions, it's a no-contest abort.
-			return if self.infection:GetConversions() > 0 then "infected" else "aborted"
+			if self.infection:GetConversions() > 0 then
+				return "infected", "Everyone got infected!"
+			end
+			return "aborted", "Match ended — no result."
 		end
 		task.wait(1)
 	end
 	-- Final boundary: extraction may have completed during the last second's wait.
 	if self.objectives:IsExtractionComplete() then
-		return "survivor"
+		return "survivor", "The survivors escaped through extraction!"
 	end
-	return "infected" -- timer expired without extraction: the clock favors the infected
+	return "infected", "Time ran out — the infected win!" -- the clock favors the infected
 end
 
 -- Blocks until the match is over. Cleanup ALWAYS runs, even if _runMatch errors.
@@ -164,12 +172,12 @@ function RoundService:RunMatch(roster: { Player })
 		player:SetAttribute("InMatch", true)
 	end
 
-	local ok, result = pcall(function()
+	local ok, result, reason = pcall(function()
 		return self:_runMatch(roster)
 	end)
 	if not ok then
 		warn("[RoundService] match error: " .. tostring(result))
-		result = "aborted"
+		result, reason = "aborted", "Match ended — no result."
 	end
 
 	if result == "aborted" then
@@ -178,7 +186,7 @@ function RoundService:RunMatch(roster: { Player })
 		self.objectives:EndObjectives()
 		for _, player in roster do
 			if player.Parent then
-				self.net.Notify:FireClient(player, "Match ended — no result.")
+				self.net.Notify:FireClient(player, reason)
 			end
 		end
 	else
@@ -189,13 +197,12 @@ function RoundService:RunMatch(roster: { Player })
 		self.infection:EndRound(roster)
 		self.objectives:EndObjectives()
 
-		-- Results: announce + the results/commendations panel.
-		local message = if infectedWin then "The Infected win!" else "The Survivors win!"
+		-- Results: announce the WHY + the results/commendations panel.
 		for _, player in roster do
 			if player.Parent then
-				self.net.Notify:FireClient(player, message)
+				self.net.Notify:FireClient(player, reason)
 				local mine = perPlayer[player] or { generators = 0, rescues = 0, survived = false }
-				self.net.MatchResults:FireClient(player, infectedWin, awards, mine)
+				self.net.MatchResults:FireClient(player, infectedWin, awards, mine, reason)
 			end
 		end
 	end

@@ -57,6 +57,19 @@ function ResultsController:Init()
 	winner.Text = ""
 	winner.Parent = panel
 
+	-- Why the match ended (extraction / timeout / wipe / everyone fled) — kids get
+	-- confused when a round "randomly" ends, so we spell it out.
+	local reasonLabel = Instance.new("TextLabel")
+	reasonLabel.BackgroundTransparency = 1
+	reasonLabel.Size = UDim2.fromScale(0.92, 0.07)
+	reasonLabel.Position = UDim2.fromScale(0.5, 0.21)
+	reasonLabel.AnchorPoint = Vector2.new(0.5, 0.5)
+	reasonLabel.Font = Brand.Font.Body
+	reasonLabel.TextScaled = true
+	reasonLabel.TextColor3 = Brand.Color.TextLight
+	reasonLabel.Text = ""
+	reasonLabel.Parent = panel
+
 	local awardsTitle = Instance.new("TextLabel")
 	awardsTitle.BackgroundTransparency = 1
 	awardsTitle.Size = UDim2.fromScale(0.92, 0.08)
@@ -101,10 +114,11 @@ function ResultsController:Init()
 	end
 
 	local token = 0
-	Net.MatchResults.OnClientEvent:Connect(function(infectedWin, awards, mine)
+	Net.MatchResults.OnClientEvent:Connect(function(infectedWin, awards, mine, reason)
 		winner.Text = if infectedWin then "\u{2620} INFECTED WIN" else "\u{1F3C6} SURVIVORS WIN"
 		winner.TextColor3 = if infectedWin then Brand.Color.InfectedPink else Brand.Color.HumanBlue
 		stroke.Color = winner.TextColor3
+		reasonLabel.Text = if typeof(reason) == "string" then reason else ""
 
 		clearAwards()
 		if typeof(awards) == "table" then

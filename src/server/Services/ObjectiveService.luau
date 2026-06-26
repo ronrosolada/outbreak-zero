@@ -252,7 +252,11 @@ function ObjectiveService:Tick(dt: number, _infectedPos: { Vector3 })
 		end
 	end
 
-	if totalLiving >= 1 and aboard == totalLiving then
+	-- Escape needs a MAJORITY of the present (within-abandon) survivors on the pad, not
+	-- ALL of them — otherwise one lost/AFK player lingering in the 12..75-stud band would
+	-- decay the hold forever and hand the round to the infected (the C1 grief case).
+	local needed = math.max(1, math.ceil(totalLiving * ObjectiveConfig.EXTRACT_REQUIRED_FRACTION))
+	if totalLiving >= 1 and aboard >= needed then
 		self.progress = math.min(100, self.progress + (100 / ObjectiveConfig.EXTRACT_HOLD_SECONDS) * dt)
 	else
 		self.progress = math.max(0, self.progress - ObjectiveConfig.EXTRACT_DECAY * dt)

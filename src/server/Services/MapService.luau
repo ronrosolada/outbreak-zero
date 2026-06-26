@@ -265,9 +265,13 @@ function MapService:LoadRandomMap(): any
 	local maps = MapConfig.maps
 	local index = 1
 	if #maps > 1 then
+		-- Pick a different map than last time, but cap the retries so an unlucky RNG run
+		-- can never stall the matchmaker thread (a rare repeat is harmless).
+		local attempts = 0
 		repeat
 			index = math.random(1, #maps)
-		until index ~= self._lastMapIndex
+			attempts += 1
+		until index ~= self._lastMapIndex or attempts >= 50
 	end
 	self._lastMapIndex = index
 	self:LoadMap(maps[index])
