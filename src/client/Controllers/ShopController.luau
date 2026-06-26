@@ -116,9 +116,14 @@ function ShopController:Init()
 	layout.Parent = list
 
 	local function refreshCoins()
-		coinLabel.Text = "Coins: " .. tostring(player:GetAttribute("Coins") or 0)
+		coinLabel.Text = string.format(
+			"\u{25C8} %d   \u{25C6} %d",
+			player:GetAttribute("Coins") or 0,
+			player:GetAttribute("Gems") or 0
+		)
 	end
 	player:GetAttributeChangedSignal("Coins"):Connect(refreshCoins)
+	player:GetAttributeChangedSignal("Gems"):Connect(refreshCoins)
 
 	-- Build one shop row: a name + an action button.
 	local order = 0
@@ -190,7 +195,8 @@ function ShopController:Init()
 			local isOwned = owned and owned[item.id] == true
 			if item.kind == "trail" then
 				if not isOwned then
-					addRow(item.name, "BUY " .. item.price, Brand.Color.SafeGreen, true, function()
+					local icon = if item.currency == "gems" then " \u{25C6}" else " \u{25C8}"
+					addRow(item.name, "BUY " .. item.price .. icon, Brand.Color.SafeGreen, true, function()
 						Net.BuyItem:FireServer(item.id)
 					end)
 				elseif equippedTrail == item.id then
@@ -202,7 +208,7 @@ function ShopController:Init()
 				end
 			else -- class unlock
 				if not isOwned then
-					addRow(item.name, "UNLOCK " .. item.price, Brand.Color.SafeGreen, true, function()
+					addRow(item.name, "UNLOCK " .. item.price .. " \u{25C8}", Brand.Color.SafeGreen, true, function()
 						Net.BuyItem:FireServer(item.id)
 					end)
 				else

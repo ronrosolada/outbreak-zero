@@ -43,7 +43,10 @@ function StoreService:_catalog(): { any }
 	local items = {}
 	for _, t in CosmeticConfig.trails do
 		if t.price > 0 then -- "none" (free) isn't a shop item
-			table.insert(items, { id = t.id, name = t.name, price = t.price, kind = "trail" })
+			table.insert(
+				items,
+				{ id = t.id, name = t.name, price = t.price, kind = "trail", currency = t.currency or "coins" }
+			)
 		end
 	end
 	for classId, def in ClassConfig.classes do
@@ -53,23 +56,24 @@ function StoreService:_catalog(): { any }
 				name = def.display .. " \u{2022} " .. def.faction,
 				price = def.unlockCost,
 				kind = "class",
+				currency = "coins",
 			})
 		end
 	end
 	return items
 end
 
--- Returns (price, kind) for a buyable id, or nil if it isn't a real shop item.
-function StoreService:_priceOf(itemId: string): (number?, string?)
+-- Returns (price, kind, currency) for a buyable id, or nil if it isn't a real shop item.
+function StoreService:_priceOf(itemId: string): (number?, string?, string?)
 	local trail = CosmeticConfig.byId[itemId]
 	if trail and trail.price > 0 then
-		return trail.price, "trail"
+		return trail.price, "trail", trail.currency or "coins"
 	end
 	local class = ClassConfig.classes[itemId]
 	if class and (class.unlockCost or 0) > 0 then
-		return class.unlockCost, "class"
+		return class.unlockCost, "class", "coins"
 	end
-	return nil, nil
+	return nil, nil, nil
 end
 
 function StoreService:_sendState(player: Player)
@@ -88,7 +92,7 @@ function StoreService:_buy(player: Player, itemId: any)
 	if typeof(itemId) ~= "string" or self:_throttled(player) then
 		return
 	end
-	local price, kind = self:_priceOf(itemId)
+	local price, kind, currency = self:_priceOf(itemId)
 	if not price then
 		return -- not a real shop item
 	end
@@ -97,8 +101,9 @@ function StoreService:_buy(player: Player, itemId: any)
 		return
 	end
 	-- Atomic: check + spend with no yield, so spam can't double-charge or over-grant.
-	if not self.data:TrySpend(player, price) then
-		self.net.Notify:FireClient(player, "Not enough coins!")
+	local paid = if currency == "gems" then self.data:TrySpendGems(player, price) else self.data:TrySpend(player, price)
+	if not paid then
+		self.net.Notify:FireClient(player, if currency == "gems" then "Not enough gems!" else "Not enough coins!")
 		return
 	end
 	self.data:Unlock(player, itemId)
