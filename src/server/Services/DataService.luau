@@ -16,6 +16,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = ReplicatedStorage:WaitForChild("Config")
 local ProgressionConfig = require(Config:WaitForChild("ProgressionConfig"))
+local ContractsConfig = require(Config:WaitForChild("ContractsConfig"))
 
 local serverRoot = script.Parent.Parent
 local Persistence = require(serverRoot:WaitForChild("Lib"):WaitForChild("Persistence"))
@@ -34,6 +35,8 @@ local DEFAULT_PROFILE = {
 	equipped = { trail = "none" }, -- cosmetic loadout
 	daily = { lastClaim = 0, streak = 0 }, -- lastClaim is an os.time() epoch
 	stats = { rounds = 0, survivorWins = 0, infectedWins = 0 },
+	-- Daily contracts: `day` is a UTC day-number stamp; progress/claimed reset when it rolls.
+	contracts = { day = 0, progress = {}, claimed = {} },
 }
 
 local DataService = {}
@@ -320,6 +323,98 @@ function DataService:TrySpend(player: Player, amount: number): boolean
 	end
 	profile.coins -= amount
 	self:_mirror(player)
+	return true
+end
+
+-- == Daily contracts =========================================================
+
+local DAY_SECONDS = 86400
+
+-- Reset the contract day if it rolled over (UTC midnight). Mutates the profile in place.
+local function ensureContractDay(profile: any)
+	local today = math.floor(os.time() / DAY_SECONDS)
+	local c = profile.contracts
+	if c.day ~= today then
+		c.day = today
+		c.progress = {}
+		c.claimed = {}
+	end
+end
+
+local function contractDef(id: string)
+	for _, d in ContractsConfig.daily do
+		if d.id == id then
+			return d
+		end
+	end
+	return nil
+end
+
+-- Snapshot of the player's contracts for the client (nil if no profile yet).
+function DataService:GetContracts(player: Player): any?
+	local profile = self.profiles[player]
+	if not profile then
+		return nil
+	end
+	ensureContractDay(profile)
+	local out = {}
+	for _, def in ContractsConfig.daily do
+		table.insert(out, {
+			id = def.id,
+			desc = def.desc,
+			target = def.target,
+			reward = def.reward,
+			progress = math.min(profile.contracts.progress[def.id] or 0, def.target),
+			claimed = profile.contracts.claimed[def.id] == true,
+		})
+	end
+	return out
+end
+
+-- Advance a contract's progress (capped at target). No-ops on unknown id / already
+-- claimed / already complete / unloaded profile. Returns true if progress changed.
+function DataService:AddContractProgress(player: Player, id: string, amount: number): boolean
+	local profile = self.profiles[player]
+	if not profile then
+		return false
+	end
+	local def = contractDef(id)
+	if not def then
+		return false
+	end
+	ensureContractDay(profile)
+	if profile.contracts.claimed[id] then
+		return false
+	end
+	local current = profile.contracts.progress[id] or 0
+	if current >= def.target then
+		return false
+	end
+	profile.contracts.progress[id] = math.min(def.target, current + amount)
+	return true
+end
+
+-- Claim a completed contract's reward (one-time). Yield-free until SaveNow, so the
+-- claimed flag is set atomically before any await — a racing claim can't double-pay.
+function DataService:ClaimContract(player: Player, id: string): boolean
+	local profile = self.profiles[player]
+	if not profile then
+		return false
+	end
+	local def = contractDef(id)
+	if not def then
+		return false
+	end
+	ensureContractDay(profile)
+	if profile.contracts.claimed[id] then
+		return false
+	end
+	if (profile.contracts.progress[id] or 0) < def.target then
+		return false
+	end
+	profile.contracts.claimed[id] = true
+	self:AddCoins(player, def.reward)
+	self:SaveNow(player)
 	return true
 end
 

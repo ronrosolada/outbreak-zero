@@ -27,6 +27,7 @@ function RoundService:Initialize(services)
 	self.infection = services.InfectionService
 	self.abilities = services.AbilityService
 	self.hazards = services.HazardService
+	self.contracts = services.ContractsService
 	self.progression = services.ProgressionService
 	self.objectives = services.ObjectiveService
 	self.stats = services.StatsService
@@ -111,8 +112,10 @@ function RoundService:_payout(roster: { Player }, infectedWin: boolean)
 			self.economy:AddCoins(player, GameConfig.REWARD_PARTICIPATION)
 			if infectedWin and role == GameConfig.ROLE_INFECTED then
 				self.economy:AddCoins(player, GameConfig.REWARD_INFECTED_WIN)
+				self.contracts:AddProgress(player, "wins", 1)
 			elseif not infectedWin and role == GameConfig.ROLE_SURVIVOR then
 				self.economy:AddCoins(player, GameConfig.REWARD_SURVIVE_WIN)
+				self.contracts:AddProgress(player, "wins", 1)
 			end
 			-- Persistent progression: XP for finishing + a bonus for winning.
 			self.progression:AwardMatchResult(player, role, infectedWin)

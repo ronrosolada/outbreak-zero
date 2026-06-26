@@ -42,3 +42,6 @@ KillFeedController:Init()
 
 local ModeSelectController = require(controllers:WaitForChild("ModeSelectController"))
 ModeSelectController:Init()
+
+local ContractsController = require(controllers:WaitForChild("ContractsController"))
+ContractsController:Init()

@@ -53,6 +53,7 @@ function InfectionService:Initialize(services)
 	self.costume = services.CostumeService
 	self.map = services.MapService
 	self.stats = services.StatsService
+	self.contracts = services.ContractsService
 	self.net = require(ReplicatedStorage:WaitForChild("Net"))
 
 	self.roles = {} :: { [Player]: string? }
@@ -301,6 +302,7 @@ function InfectionService:_tryRescue(downedPlayer: Player, rescuer: Player)
 		self.economy:AddCoins(rescuer, GameConfig.REWARD_RESCUE)
 		self.net.Notify:FireClient(rescuer, "You rescued " .. downedPlayer.Name .. "!  +" .. GameConfig.REWARD_RESCUE)
 		self.stats:Add(rescuer, "rescues", 1)
+		self.contracts:AddProgress(rescuer, "rescues", 1)
 	end
 end
 

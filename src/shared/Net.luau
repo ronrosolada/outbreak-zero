@@ -33,6 +33,9 @@ local REMOTE_NAMES = {
 	"RevealSurvivors", -- server -> Patient Zero: outline all survivors for N seconds (Outbreak Pulse)
 	"KillFeed", -- server -> all: a feed event (kind, nameA, nameB) — infect / rescue / stun / generator / outbreak
 	"ToggleQueue", -- client -> server: join/leave the Outbreak queue (the mode-select PLAY button; mirrors the pad)
+	"ContractsState", -- server -> client: daily-contract snapshot (list of {id,desc,target,reward,progress,claimed})
+	"RequestContracts", -- client -> server: "send me my current daily contracts"
+	"ClaimContract", -- client -> server: claim a completed contract's reward by id
 }
 
 local remotesFolder = ReplicatedStorage:WaitForChild("Remotes")

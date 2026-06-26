@@ -60,6 +60,7 @@ function ObjectiveService:Initialize(services)
 	self.classes = services.ClassService
 	self.economy = services.EconomyService
 	self.stats = services.StatsService
+	self.contracts = services.ContractsService
 	self.net = require(ReplicatedStorage:WaitForChild("Net"))
 
 	self.active = false
@@ -178,6 +179,7 @@ function ObjectiveService:_onGenerator(index: number, gen: BasePart, player: Pla
 		self.economy:AddCoins(player, ObjectiveConfig.REWARD_GENERATOR)
 	end
 	self.stats:Add(player, "generators", 1)
+	self.contracts:AddProgress(player, "gens", 1)
 
 	-- The comeback beat: cleanse the whole team + a green flash for survivors only.
 	self.infection:CleansePulse(ObjectiveConfig.CLEANSE_RELIEF, ObjectiveConfig.CLEANSE_IMMUNITY)

@@ -18,6 +18,7 @@ local servicesFolder = ServerScriptService:WaitForChild("Services")
 -- Dependency order: depended-upon services first; HubService (drives matches) last.
 local SERVICE_ORDER = {
 	"DataService", -- persistence first: profiles must be loadable before anything pays out
+	"ContractsService", -- daily-contract coordinator (depends on DataService)
 	"MapService",
 	"TeamManager",
 	"EconomyService",
@@ -84,6 +85,7 @@ Players.PlayerRemoving:Connect(function(player)
 	services.AbilityService:OnPlayerRemoving(player)
 	services.PingService:OnPlayerRemoving(player)
 	services.HazardService:OnPlayerRemoving(player)
+	services.ContractsService:OnPlayerRemoving(player)
 	services.StoreService:OnPlayerRemoving(player)
 	services.StatsService:OnPlayerRemoving(player)
 	services.ProgressionService:OnPlayerRemoving(player)
