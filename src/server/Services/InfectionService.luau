@@ -22,6 +22,7 @@ local Config = ReplicatedStorage:WaitForChild("Config")
 local GameConfig = require(Config:WaitForChild("GameConfig"))
 local RoundConfig = require(Config:WaitForChild("RoundConfig"))
 local InfectionConfig = require(Config:WaitForChild("InfectionConfig"))
+local ClassConfig = require(Config:WaitForChild("ClassConfig"))
 local Brand = require(ReplicatedStorage:WaitForChild("Brand"))
 
 local InfectionService = {}
@@ -49,12 +50,14 @@ function InfectionService:Initialize(services)
 	self.economy = services.EconomyService
 	self.combat = services.CombatService
 	self.classes = services.ClassService
+	self.costume = services.CostumeService
 	self.map = services.MapService
 	self.stats = services.StatsService
 	self.net = require(ReplicatedStorage:WaitForChild("Net"))
 
 	self.roles = {} :: { [Player]: string? }
 	self.isPatientZero = {} :: { [Player]: boolean }
+	self.pzBuffed = {} :: { [Player]: boolean } -- PZ early-buff active (speed/health/range); expires after BuffDuration
 	self.infection = {} :: { [Player]: number } -- 0-100, survivors only
 	self.downed = {} :: { [Player]: boolean }
 	self.downedSince = {} :: { [Player]: number }
@@ -64,6 +67,10 @@ function InfectionService:Initialize(services)
 	self.playerConns = {} :: { [Player]: { RBXScriptConnection } }
 	self.roundActive = false
 	self.conversions = 0
+	-- Ability zones (Phase 4): Spitter goo pools + Controller nests fill/slow survivors.
+	self.gooPools = {} :: { { center: Vector3, radius: number, expires: number } }
+	self.nests = {} :: { { center: Vector3, radius: number, owner: Player, expires: number } }
+	self.inNest = {} :: { [Player]: boolean } -- survivors currently inside a nest (drives the slow)
 end
 
 -- == Helpers =================================================================
@@ -95,7 +102,15 @@ function InfectionService:_applyMovement(player: Player)
 	end
 	if role then
 		-- per-class speed (Phase 4) + any active cloak surge (re-applied on stun/respawn)
-		hum.WalkSpeed = self.classes:GetWalkSpeed(player, role) + (player:GetAttribute("CloakSpeedBonus") or 0)
+		local base = self.classes:GetWalkSpeed(player, role)
+		if role == GameConfig.ROLE_INFECTED and self.pzBuffed[player] then
+			base = ClassConfig.PatientZero.WalkSpeed -- buffed Patient Zero outpaces its base class
+		end
+		local speed = base + (player:GetAttribute("CloakSpeedBonus") or 0)
+		if role == GameConfig.ROLE_SURVIVOR and self.inNest[player] then
+			speed *= InfectionConfig.NEST_SLOW_MULT -- inside a Controller nest
+		end
+		hum.WalkSpeed = speed
 	else
 		hum.WalkSpeed = GameConfig.SURVIVOR_WALKSPEED -- hub default
 	end
@@ -120,9 +135,49 @@ function InfectionService:_infectedPositions(): { Vector3 }
 	return positions
 end
 
+-- Like _infectedPositions but tags each with its contact range (buffed PZ reaches further).
+function InfectionService:_infectedContacts(): { { pos: Vector3, range: number } }
+	local out = {}
+	for player, role in self.roles do
+		if role == GameConfig.ROLE_INFECTED and not player:GetAttribute("Stunned") then
+			local hrp = getRootPart(player)
+			if hrp then
+				local range = InfectionConfig.CONTACT_RANGE
+				if self.pzBuffed[player] then
+					range *= ClassConfig.PatientZero.InfectRangeMult
+				end
+				table.insert(out, { pos = hrp.Position, range = range })
+			end
+		end
+	end
+	return out
+end
+
 local function anyWithin(positions: { Vector3 }, target: Vector3, range: number): boolean
 	for _, pos in positions do
 		if (pos - target).Magnitude <= range then
+			return true
+		end
+	end
+	return false
+end
+
+-- Horizontal membership test against a list of {center, radius} ability zones.
+local function inZone(zones: { any }, pos: Vector3): boolean
+	for _, z in zones do
+		if Vector3.new(pos.X - z.center.X, 0, pos.Z - z.center.Z).Magnitude <= z.radius then
+			return true
+		end
+	end
+	return false
+end
+
+-- Per-infected contact test (each infected carries its OWN range, so a buffed
+-- Patient Zero can reach further). Rescue/prompt SECURE_RANGE still uses the plain
+-- position list — only contact-fill needs per-infected range.
+local function anyContact(contacts: { { pos: Vector3, range: number } }, target: Vector3): boolean
+	for _, c in contacts do
+		if (c.pos - target).Magnitude <= c.range then
 			return true
 		end
 	end
@@ -257,6 +312,7 @@ function InfectionService:_convert(player: Player)
 	self.isPatientZero[player] = false
 	self.immuneUntil[player] = nil
 	self.lastContact[player] = nil
+	self.inNest[player] = nil
 	player:SetAttribute("Downed", false)
 	player:SetAttribute("Infection", 0)
 	self:_removePrompt(player)
@@ -264,6 +320,7 @@ function InfectionService:_convert(player: Player)
 	self.combat:RemoveLoadout(player)
 	self.combat:InitInfected(player)
 	self:_applyMovement(player)
+	self.costume:Apply(player, GameConfig.ROLE_INFECTED)
 
 	self.net.Notify:FireClient(player, "You've turned! Hunt the survivors.")
 end
@@ -272,9 +329,25 @@ end
 
 function InfectionService:_tick(dt: number)
 	local now = os.clock()
+	self:_pruneZones(now) -- drop expired goo pools / nests
 	-- Safe to iterate: _convert only rewrites an existing self.roles VALUE; nothing
 	-- here may ADD or REMOVE self.roles keys during the loop.
-	local infectedPos = self:_infectedPositions()
+	local infectedPos = self:_infectedPositions() -- plain list: rescue / prompt SECURE_RANGE
+	local contacts = self:_infectedContacts() -- per-infected range: contact-fill (buffed PZ reaches further)
+
+	-- Medic passive (AllyDecayMult): standing survivors near a Medic decay faster.
+	local medics = {}
+	for player, role in self.roles do
+		if role == GameConfig.ROLE_SURVIVOR and not self.downed[player] then
+			local mult = self.classes:GetPassive(player, GameConfig.ROLE_SURVIVOR).AllyDecayMult
+			if mult then
+				local mhrp = getRootPart(player)
+				if mhrp then
+					table.insert(medics, { pos = mhrp.Position, mult = mult })
+				end
+			end
+		end
+	end
 
 	for player, role in self.roles do
 		if role ~= GameConfig.ROLE_SURVIVOR then
@@ -298,20 +371,36 @@ function InfectionService:_tick(dt: number)
 		else
 			local hrp = getRootPart(player)
 			if hrp then
+				-- Controller nest slow: re-apply movement only when nest membership flips.
+				local nowInNest = inZone(self.nests, hrp.Position)
+				if nowInNest ~= (self.inNest[player] == true) then
+					self.inNest[player] = nowInNest
+					self:_applyMovement(player)
+				end
+
 				local immune = self:_isImmune(player)
 				local current = self.infection[player] or 0
-				local contact = anyWithin(infectedPos, hrp.Position, InfectionConfig.CONTACT_RANGE)
+				local contact = anyContact(contacts, hrp.Position)
 				local hazard = self.map ~= nil and self.map:InHazard(hrp.Position)
-				if contact or hazard then
+				local goo = inZone(self.gooPools, hrp.Position)
+				if contact or hazard or goo or nowInNest then
 					self.lastContact[player] = now
 					if not immune then
 						-- contact and/or hazard both fill; immunity blocks GAIN, not decay
 						local rate = (contact and InfectionConfig.FILL_RATE or 0)
 							+ (hazard and InfectionConfig.HAZARD_FILL_RATE or 0)
-						current += rate * dt
+							+ (goo and InfectionConfig.GOO_POOL_FILL_RATE or 0)
+							+ (nowInNest and InfectionConfig.NEST_FILL_BONUS or 0)
+						current += rate * self.classes:GetFillMult(player) * dt
 					end
 				elseif now - (self.lastContact[player] or 0) >= InfectionConfig.DECAY_DELAY then
-					current -= InfectionConfig.DECAY_RATE * dt
+					local decayMult = 1
+					for _, m in medics do
+						if (m.pos - hrp.Position).Magnitude <= InfectionConfig.MEDIC_AURA_RANGE then
+							decayMult = math.max(decayMult, m.mult)
+						end
+					end
+					current -= InfectionConfig.DECAY_RATE * decayMult * dt
 				end
 				self:_setInfection(player, current)
 				if not immune and (self.infection[player] or 0) >= 100 then
@@ -350,6 +439,7 @@ function InfectionService:OnPlayerAdded(player: Player)
 	self.playerConns[player] = {}
 	self.roles[player] = nil
 	self.isPatientZero[player] = false
+	self.pzBuffed[player] = false
 	player:SetAttribute("Infection", 0)
 	player:SetAttribute("Downed", false)
 
@@ -388,6 +478,7 @@ function InfectionService:_onCharacterAdded(player: Player)
 		self:_setInfection(player, 0)
 		self.lastContact[player] = nil
 		self.immuneUntil[player] = os.clock() + InfectionConfig.SPAWN_IMMUNITY
+		self.inNest[player] = nil -- fresh body isn't in a nest; clear so it doesn't inherit the slow
 		self.combat:GiveLoadout(player) -- re-issue weapons on a fresh body
 	elseif self.roundActive and self.roles[player] == GameConfig.ROLE_INFECTED then
 		-- Stunned survives respawn (drives the freeze + pending recover); re-create
@@ -395,6 +486,7 @@ function InfectionService:_onCharacterAdded(player: Player)
 		self.combat:RefreshStun(player)
 	end
 	self:_applyMovement(player)
+	self.costume:Apply(player, self.roles[player]) -- repaint class palette on the fresh body
 end
 
 function InfectionService:OnPlayerRemoving(player: Player)
@@ -405,11 +497,13 @@ function InfectionService:OnPlayerRemoving(player: Player)
 	self.playerConns[player] = nil
 	self.roles[player] = nil
 	self.isPatientZero[player] = nil
+	self.pzBuffed[player] = nil
 	self.infection[player] = nil
 	self.downed[player] = nil
 	self.downedSince[player] = nil
 	self.immuneUntil[player] = nil
 	self.lastContact[player] = nil
+	self.inNest[player] = nil
 end
 
 function InfectionService:StartRound(roster: { Player })
@@ -427,9 +521,11 @@ function InfectionService:StartRound(roster: { Player })
 	end
 
 	self.roundActive = true
+	self._pzGen = (self._pzGen or 0) + 1 -- invalidates any prior round's pending PZ-normalize closures
 
 	for _, player in roster do
 		self.isPatientZero[player] = chosen[player] == true
+		self.pzBuffed[player] = chosen[player] == true -- buff active; _applyMovement reads it for PZ speed
 		self.downed[player] = nil
 		self.downedSince[player] = nil
 		self.lastContact[player] = nil
@@ -441,6 +537,13 @@ function InfectionService:StartRound(roster: { Player })
 			player:SetAttribute("Infection", 0)
 			self.teams:ToInfected(player)
 			self.combat:InitInfected(player)
+			-- Buffed stun-out threshold: a FLOOR, never below the class value (a tank PZ like
+			-- Bruiser 350 must not be nerfed to 220 during its opener).
+			player:SetAttribute(
+				"Health",
+				math.max(self.classes:GetInfectedHealth(player), ClassConfig.PatientZero.Health)
+			)
+			self:_schedulePZNormalize(player)
 			self.net.RoleAssigned:FireClient(player, GameConfig.ROLE_INFECTED)
 			self.net.Notify:FireClient(player, "You are PATIENT ZERO! Infect the survivors.")
 		else
@@ -453,18 +556,52 @@ function InfectionService:StartRound(roster: { Player })
 			self.net.Notify:FireClient(player, "You are a SURVIVOR! Keep your infection below 100%.")
 		end
 		self:_applyMovement(player)
+		self.costume:Apply(player, self.roles[player])
+	end
+
+	-- Outbreak Pulse: briefly reveal every survivor to each Patient Zero at spawn.
+	local survivors = {}
+	for player, role in self.roles do
+		if role == GameConfig.ROLE_SURVIVOR then
+			table.insert(survivors, player)
+		end
+	end
+	for player in self.pzBuffed do
+		if self.pzBuffed[player] and player.Parent then
+			self.net.RevealSurvivors:FireClient(player, survivors, ClassConfig.PatientZero.RevealDuration)
+		end
 	end
 
 	self:_startLoop()
 end
 
+-- After BuffDuration the Patient Zero normalizes to its chosen infected class
+-- (speed drops, stun-out health clamps down to the class value).
+function InfectionService:_schedulePZNormalize(player: Player)
+	local gen = self._pzGen
+	task.delay(ClassConfig.PatientZero.BuffDuration, function()
+		if self._pzGen ~= gen or not self.pzBuffed[player] then
+			return -- a new round (or an early un-buff) superseded this schedule
+		end
+		self.pzBuffed[player] = false
+		if self.roles[player] == GameConfig.ROLE_INFECTED then
+			self:_applyMovement(player)
+			local classMax = self.classes:GetInfectedHealth(player)
+			local current = player:GetAttribute("Health") or classMax
+			player:SetAttribute("Health", math.min(current, classMax))
+		end
+	end)
+end
+
 function InfectionService:EndRound(roster: { Player })
 	self.roundActive = false
+	self:ClearZones() -- drop goo pools / nests so CanCollide parts don't block next match
 	for _, player in roster do
 		self:_removePrompt(player)
 		self.combat:ClearCombat(player)
 		self.roles[player] = nil
 		self.isPatientZero[player] = false
+		self.pzBuffed[player] = false
 		self.infection[player] = nil
 		self.downed[player] = nil
 		self.downedSince[player] = nil
@@ -490,12 +627,13 @@ function InfectionService:ApplyMovement(player: Player)
 	self:_applyMovement(player)
 end
 
--- Ability hooks (Phase 4): adjust a survivor's infection meter.
+-- Ability hooks (Phase 4): adjust a survivor's infection meter. Ability-driven infection
+-- (e.g. Bruiser Ground Slam) honors the class fillMult tankiness lever, like passive fill.
 function InfectionService:AddInfection(player: Player, amount: number)
 	if self.roles[player] ~= GameConfig.ROLE_SURVIVOR or self.downed[player] or self:_isImmune(player) then
 		return
 	end
-	self:_setInfection(player, (self.infection[player] or 0) + amount)
+	self:_setInfection(player, (self.infection[player] or 0) + amount * self.classes:GetFillMult(player))
 	if (self.infection[player] or 0) >= 100 then
 		self:_down(player)
 	end
@@ -506,6 +644,70 @@ function InfectionService:ReduceInfection(player: Player, amount: number)
 		return
 	end
 	self:_setInfection(player, (self.infection[player] or 0) - amount)
+end
+
+-- == Ability zones (Spitter goo pools / Controller nests) ====================
+
+function InfectionService:_pruneZones(now: number)
+	for i = #self.gooPools, 1, -1 do
+		if self.gooPools[i].expires <= now then
+			table.remove(self.gooPools, i)
+		end
+	end
+	for i = #self.nests, 1, -1 do
+		if self.nests[i].expires <= now then
+			table.remove(self.nests, i)
+		end
+	end
+end
+
+function InfectionService:IsRoundActive(): boolean
+	return self.roundActive == true
+end
+
+-- Spitter Goo Spit: an infecting pool (AbilityService spawns the visual part separately).
+-- Returns the zone table (or nil if the round already ended) so the caller can drop it later.
+function InfectionService:RegisterGooPool(center: Vector3, radius: number, lifetime: number)
+	if not self.roundActive then
+		return nil -- a delayed fuse landing after EndRound must not leak a zone into the next match
+	end
+	local zone = { center = center, radius = radius, expires = os.clock() + lifetime }
+	table.insert(self.gooPools, zone)
+	return zone
+end
+
+-- Controller Mutation Nest: a slow + infect zone. Returns the zone table so the owning
+-- structure can remove it when the nest is shot down / its owner leaves.
+function InfectionService:RegisterNest(center: Vector3, radius: number, owner: Player, lifetime: number)
+	if not self.roundActive then
+		return nil
+	end
+	local zone = { center = center, radius = radius, owner = owner, expires = os.clock() + lifetime }
+	table.insert(self.nests, zone)
+	return zone
+end
+
+-- Remove a single zone (by reference) early — e.g. a nest shot down or its owner left.
+-- The next tick re-flags inNest for anyone who was standing in it.
+function InfectionService:RemoveZone(zone)
+	if not zone then
+		return
+	end
+	local i = table.find(self.nests, zone)
+	if i then
+		table.remove(self.nests, i)
+		return
+	end
+	i = table.find(self.gooPools, zone)
+	if i then
+		table.remove(self.gooPools, i)
+	end
+end
+
+function InfectionService:ClearZones()
+	self.gooPools = {}
+	self.nests = {}
+	self.inNest = {}
 end
 
 -- Phase 5 comeback: a team-wide cleanse fired when a generator is powered. Revives

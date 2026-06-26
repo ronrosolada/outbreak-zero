@@ -29,6 +29,8 @@ local REMOTE_NAMES = {
 	"StoreState", -- server -> client: catalog, owned-set, equipped trail
 	"BuyItem", -- client -> server: buy a catalog item by id (coins)
 	"EquipItem", -- client -> server: equip an owned trail by id
+	"RevealInfected", -- server -> survivors: outline these infected for N seconds (Scout Motion Ping)
+	"RevealSurvivors", -- server -> Patient Zero: outline all survivors for N seconds (Outbreak Pulse)
 }
 
 local remotesFolder = ReplicatedStorage:WaitForChild("Remotes")

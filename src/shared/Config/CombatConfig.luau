@@ -22,6 +22,7 @@ local CombatConfig = {
 	-- == Infected health + stun ==
 	INFECTED_MAX_HEALTH = 100,
 	STUN_SECONDS = 5, -- how long an infected is downed/frozen after HP hits 0
+	BATON_STUN_MULT = 1.2, -- Assault passive: their Stun Baton holds infected 20% longer
 }
 
 return CombatConfig

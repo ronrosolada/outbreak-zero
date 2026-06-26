@@ -56,6 +56,8 @@ end
 
 function CombatService:Initialize(services)
 	self.infection = services.InfectionService
+	self.classes = services.ClassService
+	self.abilities = services.AbilityService
 	self.net = require(ReplicatedStorage:WaitForChild("Net"))
 	self.lastUse = {} :: { [Player]: { [string]: number } }
 	self.stunToken = {} :: { [Player]: number }
@@ -99,8 +101,14 @@ end
 
 -- == Infected health / stun ==================================================
 
+-- Per-class stun-out threshold (Bruiser tanks, Stalker is squishy). Falls back to
+-- the flat config value if the class lookup is unavailable.
+function CombatService:_maxHealth(player: Player): number
+	return self.classes:GetInfectedHealth(player) or CombatConfig.INFECTED_MAX_HEALTH
+end
+
 function CombatService:InitInfected(player: Player)
-	player:SetAttribute("Health", CombatConfig.INFECTED_MAX_HEALTH)
+	player:SetAttribute("Health", self:_maxHealth(player))
 	player:SetAttribute("Stunned", false)
 end
 
@@ -134,12 +142,20 @@ end
 
 function CombatService:_recover(player: Player)
 	player:SetAttribute("Stunned", false)
-	player:SetAttribute("Health", CombatConfig.INFECTED_MAX_HEALTH)
+	player:SetAttribute("Health", self:_maxHealth(player))
 	self:_setHighlight(player, false)
 	self.infection:ApplyMovement(player)
 end
 
-function CombatService:_stun(player: Player)
+-- Public stun (FragGrenade, etc. pass an explicit duration). Guards mirror DamageInfected.
+function CombatService:Stun(player: Player, duration: number?)
+	if self.infection:GetRole(player) ~= GameConfig.ROLE_INFECTED then
+		return
+	end
+	self:_stun(player, duration)
+end
+
+function CombatService:_stun(player: Player, duration: number?)
 	if self:IsStunned(player) then
 		return
 	end
@@ -151,7 +167,7 @@ function CombatService:_stun(player: Player)
 
 	self.stunToken[player] = (self.stunToken[player] or 0) + 1
 	local token = self.stunToken[player]
-	task.delay(CombatConfig.STUN_SECONDS, function()
+	task.delay(duration or CombatConfig.STUN_SECONDS, function()
 		-- Only recover if this stun is still the active one and they're still infected.
 		if
 			self.stunToken[player] == token
@@ -163,16 +179,24 @@ function CombatService:_stun(player: Player)
 	end)
 end
 
-function CombatService:DamageInfected(target: Player, amount: number, attacker: Player?)
+function CombatService:DamageInfected(target: Player, amount: number, attacker: Player?, source: string?)
 	if self.infection:GetRole(target) ~= GameConfig.ROLE_INFECTED then
 		return
 	end
 	if self:IsStunned(target) then
 		return
 	end
-	local hp = (target:GetAttribute("Health") or CombatConfig.INFECTED_MAX_HEALTH) - amount
+	local hp = (target:GetAttribute("Health") or self:_maxHealth(target)) - amount
 	if hp <= 0 then
-		self:_stun(target)
+		-- Assault passive: their Stun Baton (melee) holds the infected stunned longer.
+		local duration = CombatConfig.STUN_SECONDS
+		if source == "Melee" and attacker then
+			local mult = self.classes:GetPassive(attacker, GameConfig.ROLE_SURVIVOR).BatonStunMult
+			if mult then
+				duration *= mult
+			end
+		end
+		self:_stun(target, duration)
 	else
 		target:SetAttribute("Health", hp)
 	end
@@ -238,7 +262,10 @@ function CombatService:_useWeapon(player: Player, kind, direction)
 		if result then
 			local victim = playerFromInstance(result.Instance)
 			if victim and victim ~= player then
-				self:DamageInfected(victim, CombatConfig.RANGED_DAMAGE, player)
+				self:DamageInfected(victim, CombatConfig.RANGED_DAMAGE, player, "Ranged")
+			elseif result.Instance:GetAttribute("StructureKind") == "Nest" then
+				-- Survivors can shoot down a Controller nest (counterplay against zoning).
+				self.abilities:DamageStructure(result.Instance, CombatConfig.RANGED_DAMAGE, player)
 			end
 		end
 	elseif kind == "Melee" then
@@ -254,7 +281,7 @@ function CombatService:_useWeapon(player: Player, kind, direction)
 						(to - from).Magnitude <= CombatConfig.MELEE_RANGE
 						and self:_clearPath(from, to, char, targetChar)
 					then
-						self:DamageInfected(target, CombatConfig.MELEE_DAMAGE, player)
+						self:DamageInfected(target, CombatConfig.MELEE_DAMAGE, player, "Melee")
 					end
 				end
 			end

@@ -24,8 +24,6 @@ local Brand = require(ReplicatedStorage:WaitForChild("Brand"))
 
 local AbilityService = {}
 
-local STUN_DAMAGE = 1e9 -- enough to drop any infected straight to a stun
-
 local function getRoot(player: Player): BasePart?
 	local char = player.Character
 	return char and char:FindFirstChild("HumanoidRootPart") :: BasePart? or nil
@@ -59,6 +57,9 @@ function AbilityService:Initialize(services)
 	self.net = require(ReplicatedStorage:WaitForChild("Net"))
 	self.lastUse = {} :: { [Player]: { [string]: number } }
 	self.cloakToken = {} :: { [Player]: number }
+	-- Spawned world structures (Engineer barricades, Controller nests) that need
+	-- cleanup on owner-leave + round-end so CanCollide parts never block a fresh match.
+	self.structures = {} :: { { part: BasePart, kind: string, owner: Player } }
 end
 
 function AbilityService:Start()
@@ -70,6 +71,78 @@ end
 function AbilityService:OnPlayerRemoving(player: Player)
 	self.lastUse[player] = nil
 	self.cloakToken[player] = nil
+	for i = #self.structures, 1, -1 do
+		if self.structures[i].owner == player then
+			local entry = table.remove(self.structures, i)
+			self:_destroyStructure(entry) -- drops the part AND its infection zone (no phantom nest)
+		end
+	end
+end
+
+-- Track a spawned structure and auto-dissolve it after `lifetime` seconds. The caller
+-- may set entry.zone afterwards (the matching InfectionService zone) so removal drops both.
+function AbilityService:_trackStructure(part: BasePart, kind: string, owner: Player, lifetime: number)
+	local entry = { part = part, kind = kind, owner = owner, zone = nil }
+	table.insert(self.structures, entry)
+	task.delay(lifetime, function()
+		self:_removeStructure(entry)
+	end)
+	return entry
+end
+
+-- Destroy a structure's part + its infection zone (does NOT touch self.structures).
+function AbilityService:_destroyStructure(entry)
+	if not entry then
+		return
+	end
+	if entry.zone then
+		self.infection:RemoveZone(entry.zone) -- zone must never outlive its part
+	end
+	if entry.part.Parent then
+		entry.part:Destroy()
+	end
+end
+
+function AbilityService:_removeStructure(entry)
+	local idx = table.find(self.structures, entry)
+	if idx then
+		table.remove(self.structures, idx)
+	end
+	self:_destroyStructure(entry)
+end
+
+-- Survivor weapon fire damages enemy structures (Controller nests). CombatService calls
+-- this on a raycast/melee hit against a part tagged StructureKind=="Nest". At <=0 the nest
+-- is removed (part + zone), giving survivors real counterplay against zoning.
+function AbilityService:DamageStructure(part: BasePart, amount: number, attacker: Player?)
+	for _, entry in self.structures do
+		if entry.part == part then
+			local hp = (part:GetAttribute("Health") or 0) - amount
+			if hp <= 0 then
+				self:_removeStructure(entry)
+				if attacker and attacker.Parent then
+					self.net.CombatFeedback:FireClient(attacker, "hit")
+				end
+			else
+				part:SetAttribute("Health", hp)
+				if attacker and attacker.Parent then
+					self.net.CombatFeedback:FireClient(attacker, "hit")
+				end
+			end
+			return
+		end
+	end
+end
+
+-- Destroy every spawned structure (round-end). InfectionService:ClearZones() also clears
+-- the nest/goo infection zones in the same EndRound pass (belt-and-suspenders w/ RemoveZone).
+function AbilityService:ClearStructures()
+	for _, entry in self.structures do
+		if entry.part.Parent then
+			entry.part:Destroy()
+		end
+	end
+	self.structures = {}
 end
 
 function AbilityService:_activate(player: Player, direction)
@@ -98,11 +171,27 @@ function AbilityService:_activate(player: Player, direction)
 		self:_fragGrenade(player, def, direction)
 	elseif abilityId == "CleanseBeam" then
 		self:_cleanseBeam(player, def)
+	elseif abilityId == "Barricade" then
+		self:_barricade(player, def, direction)
+	elseif abilityId == "MotionPing" then
+		self:_motionPing(player, def)
 	elseif abilityId == "GroundSlam" then
 		self:_groundSlam(player, def)
 	elseif abilityId == "CloakLunge" then
 		self:_cloakLunge(player, def)
+	elseif abilityId == "GooSpit" then
+		self:_gooSpit(player, def, direction)
+	elseif abilityId == "MutationNest" then
+		self:_mutationNest(player, def)
 	end
+end
+
+-- Horizontal aim from a client-supplied direction, falling back to facing.
+local function aimDir(hrp: BasePart, direction): Vector3
+	local dir = (typeof(direction) == "Vector3" and direction.Magnitude > 0.01) and direction.Unit
+		or hrp.CFrame.LookVector
+	dir = Vector3.new(dir.X, 0, dir.Z)
+	return dir.Magnitude > 0.01 and dir.Unit or hrp.CFrame.LookVector
 end
 
 -- Assault: lob a grenade that stuns infected in the blast.
@@ -141,7 +230,7 @@ function AbilityService:_fragGrenade(player: Player, def, direction)
 			if self.infection:GetRole(target) == GameConfig.ROLE_INFECTED then
 				local thrp = getRoot(target)
 				if thrp and (thrp.Position - center).Magnitude <= def.blastRadius then
-					self.combat:DamageInfected(target, STUN_DAMAGE, player)
+					self.combat:Stun(target, def.stunDuration)
 				end
 			end
 		end
@@ -180,6 +269,15 @@ function AbilityService:_groundSlam(player: Player, def)
 			local thrp = getRoot(target)
 			if thrp and (thrp.Position - hrp.Position).Magnitude <= def.radius then
 				self.infection:AddInfection(target, def.infectBurst)
+			end
+		end
+	end
+	-- Shatters Engineer barricades caught in the slam (def.breaksBarricade).
+	if def.breaksBarricade then
+		for i = #self.structures, 1, -1 do
+			local entry = self.structures[i]
+			if entry.kind == "Barricade" and (entry.part.Position - hrp.Position).Magnitude <= def.radius then
+				self:_removeStructure(entry)
 			end
 		end
 	end
@@ -222,6 +320,137 @@ function AbilityService:_cloakLunge(player: Player, def)
 		player:SetAttribute("CloakSpeedBonus", nil)
 		self.infection:ApplyMovement(player) -- revert to class default speed
 	end)
+end
+
+-- Engineer: drop a destructible wall to seal a lane / shield a downed ally.
+function AbilityService:_barricade(player: Player, def, direction)
+	local hrp = getRoot(player)
+	if not hrp then
+		return
+	end
+	local dir = aimDir(hrp, direction)
+	local size = Vector3.new(def.wallSize[1], def.wallSize[2], def.wallSize[3])
+	local center = hrp.Position + dir * def.offset
+	center = Vector3.new(center.X, hrp.Position.Y - 2.5 + size.Y / 2, center.Z)
+
+	local wall = Instance.new("Part")
+	wall.Size = size
+	wall.CFrame = CFrame.lookAt(center, center + dir) -- thin axis faces along the lane
+	wall.Anchored = true
+	wall.CanCollide = true
+	wall.Material = Enum.Material.Metal
+	wall.Color = Brand.Color.HumanBlue
+	wall.Transparency = 0.1
+	wall:SetAttribute("Structure", true) -- a Bruiser Ground Slam (breaksBarricade) shatters it; weapons don't (friendly)
+	wall:SetAttribute("StructureKind", "Barricade")
+	wall:SetAttribute("Health", def.wallHealth)
+	wall:SetAttribute("MaxHealth", def.wallHealth)
+	wall.Parent = Workspace
+
+	self:_trackStructure(wall, "Barricade", player, def.lifetime)
+	burst(center, Brand.Color.HumanBlue, 4)
+end
+
+-- Scout: sonar pulse — outline infected within range for the whole survivor team.
+function AbilityService:_motionPing(player: Player, def)
+	local hrp = getRoot(player)
+	if not hrp then
+		return
+	end
+	burst(hrp.Position, Brand.Color.HumanBlue, 6)
+
+	local revealed = {}
+	for _, target in Players:GetPlayers() do
+		if self.infection:GetRole(target) == GameConfig.ROLE_INFECTED then
+			local thrp = getRoot(target)
+			if thrp and (thrp.Position - hrp.Position).Magnitude <= def.range then
+				table.insert(revealed, target)
+			end
+		end
+	end
+
+	-- Push the outline to every survivor (team-wide intel), including the Scout.
+	for _, ally in Players:GetPlayers() do
+		if self.infection:GetRole(ally) == GameConfig.ROLE_SURVIVOR then
+			self.net.RevealInfected:FireClient(ally, revealed, def.revealDuration)
+		end
+	end
+	self.net.Notify:FireClient(player, "Motion ping: " .. #revealed .. " contact(s)")
+end
+
+-- Spitter: lob goo that lands as an infecting pool (registered with InfectionService).
+function AbilityService:_gooSpit(player: Player, def, direction)
+	local hrp = getRoot(player)
+	if not hrp then
+		return
+	end
+	local dir = aimDir(hrp, direction)
+
+	local glob = Instance.new("Part")
+	glob.Shape = Enum.PartType.Ball
+	glob.Size = Vector3.new(1.6, 1.6, 1.6)
+	glob.Color = Brand.Color.HazardYellow
+	glob.Material = Enum.Material.Neon
+	glob.CanCollide = false
+	glob.Position = hrp.Position + dir * 3 + Vector3.new(0, 2, 0)
+	glob.AssemblyLinearVelocity = dir * def.throwSpeed + Vector3.new(0, 18, 0)
+	glob.Parent = Workspace
+	Debris:AddItem(glob, def.fuse + 1)
+
+	task.delay(def.fuse, function()
+		local center = glob.Parent and glob.Position or (hrp.Position + dir * def.range)
+		glob:Destroy()
+		-- Round may have ended during the fuse — RegisterGooPool returns nil then; bail so we
+		-- don't spawn an orphan visual that lingers into the next match.
+		local zone = self.infection:RegisterGooPool(center, def.poolRadius, def.poolLifetime)
+		if not zone then
+			return
+		end
+
+		-- Flat translucent pool visual (decorative; the infection is the registered zone).
+		local pool = Instance.new("Part")
+		pool.Shape = Enum.PartType.Cylinder
+		pool.Size = Vector3.new(0.6, def.poolRadius * 2, def.poolRadius * 2)
+		pool.CFrame = CFrame.new(Vector3.new(center.X, center.Y - 2.4, center.Z)) * CFrame.Angles(0, 0, math.rad(90))
+		pool.Anchored = true
+		pool.CanCollide = false
+		pool.CanQuery = false
+		pool.Material = Enum.Material.Neon
+		pool.Color = Brand.Color.HazardYellow
+		pool.Transparency = 0.55
+		pool.Parent = Workspace
+		-- Track so ClearStructures() removes it on round-end (keeps part/zone cleanup symmetric).
+		local entry = self:_trackStructure(pool, "GooPool", player, def.poolLifetime)
+		entry.zone = zone
+	end)
+end
+
+-- Controller: plant a nest that slows survivors + speeds infection (registered zone).
+function AbilityService:_mutationNest(player: Player, def)
+	local hrp = getRoot(player)
+	if not hrp then
+		return
+	end
+	local center = hrp.Position - Vector3.new(0, 1.5, 0)
+
+	local nest = Instance.new("Part")
+	nest.Shape = Enum.PartType.Ball
+	nest.Size = Vector3.new(5, 5, 5)
+	nest.CFrame = CFrame.new(center)
+	nest.Anchored = true
+	nest.CanCollide = false
+	nest.Material = Enum.Material.Neon
+	nest.Color = Brand.Color.InfectedPink
+	nest.Transparency = 0.25
+	nest:SetAttribute("Structure", true)
+	nest:SetAttribute("StructureKind", "Nest")
+	nest:SetAttribute("Health", def.nestHealth)
+	nest:SetAttribute("MaxHealth", def.nestHealth)
+	nest.Parent = Workspace
+
+	local entry = self:_trackStructure(nest, "Nest", player, def.lifetime)
+	entry.zone = self.infection:RegisterNest(center, def.nestRadius, player, def.lifetime)
+	burst(center, Brand.Color.InfectedPink, def.nestRadius)
 end
 
 return AbilityService

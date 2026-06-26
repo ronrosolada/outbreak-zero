@@ -24,6 +24,7 @@ local SERVICE_ORDER = {
 	"ProgressionService",
 	"StatsService",
 	"ClassService",
+	"CostumeService",
 	"CombatService",
 	"InfectionService",
 	"AbilityService",

@@ -21,6 +21,14 @@ local InfectionConfig = {
 	RESCUE_RANGE = 8, -- studs: how close you must be to start a rescue
 	SECURE_RANGE = 14, -- studs: an infected this close to a downed ally BLOCKS rescue
 	RESCUE_INFECTION = 40, -- infection % a revived survivor starts at (repeat downs hurt)
+
+	-- == Class / ability infection levers (design handoff) ==
+	GOO_POOL_FILL_RATE = 8, -- %/sec while standing in a Spitter goo pool
+	NEST_SLOW_MULT = 0.6, -- survivor WalkSpeed multiplier inside a Controller nest
+	NEST_FILL_BONUS = 12, -- extra infection %/sec inside a Controller nest
+	MEDIC_AURA_RANGE = 22, -- studs: survivors within this of a Medic decay infection faster (AllyDecayMult)
+	-- NOTE: Patient Zero range/buff-duration live in ClassConfig.PatientZero (InfectRangeMult /
+	-- BuffDuration) — the single source of truth the code reads. Do not re-add PZ tunables here.
 }
 
 return InfectionConfig

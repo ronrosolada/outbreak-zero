@@ -83,4 +83,22 @@ function ClassService:GetWalkSpeed(player: Player, role: string): number
 	return def and def.walkSpeed or GameConfig.SURVIVOR_WALKSPEED
 end
 
+-- Survivor infection-fill multiplier (HP-as-tankiness): tankier classes fill slower.
+function ClassService:GetFillMult(player: Player): number
+	local def = ClassConfig.classes[self:GetClassForRole(player, GameConfig.ROLE_SURVIVOR)]
+	return (def and def.fillMult) or 1
+end
+
+-- The chosen class's Passive flags for a role (e.g. {AllyDecayMult=1.5}).
+function ClassService:GetPassive(player: Player, role: string): { [string]: any }
+	local def = ClassConfig.classes[self:GetClassForRole(player, role)]
+	return (def and def.Passive) or {}
+end
+
+-- Infected stun-out threshold for the player's chosen infected class (tankiness).
+function ClassService:GetInfectedHealth(player: Player): number
+	local def = ClassConfig.classes[self:GetClassForRole(player, GameConfig.ROLE_INFECTED)]
+	return (def and def.health) or 100
+end
+
 return ClassService

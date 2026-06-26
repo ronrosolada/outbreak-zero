@@ -25,6 +25,7 @@ function RoundService:Initialize(services)
 	self.teams = services.TeamManager
 	self.economy = services.EconomyService
 	self.infection = services.InfectionService
+	self.abilities = services.AbilityService
 	self.progression = services.ProgressionService
 	self.objectives = services.ObjectiveService
 	self.stats = services.StatsService
@@ -185,6 +186,7 @@ function RoundService:RunMatch(roster: { Player })
 		-- No real contest (everyone left / mid-match error): clean up, no payout, neutral notice.
 		self.infection:EndRound(roster)
 		self.objectives:EndObjectives()
+		self.abilities:ClearStructures()
 		for _, player in roster do
 			if player.Parent then
 				self.net.Notify:FireClient(player, reason)
@@ -197,6 +199,7 @@ function RoundService:RunMatch(roster: { Player })
 		local awards, perPlayer = self.stats:BuildResults(roster)
 		self.infection:EndRound(roster)
 		self.objectives:EndObjectives()
+		self.abilities:ClearStructures()
 
 		-- Results: announce the WHY + the results/commendations panel.
 		for _, player in roster do

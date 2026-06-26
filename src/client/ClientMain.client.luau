@@ -33,3 +33,6 @@ OnboardingController:Init()
 
 local ShopController = require(controllers:WaitForChild("ShopController"))
 ShopController:Init()
+
+local RevealController = require(controllers:WaitForChild("RevealController"))
+RevealController:Init()
