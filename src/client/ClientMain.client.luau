@@ -39,3 +39,6 @@ RevealController:Init()
 
 local KillFeedController = require(controllers:WaitForChild("KillFeedController"))
 KillFeedController:Init()
+
+local ModeSelectController = require(controllers:WaitForChild("ModeSelectController"))
+ModeSelectController:Init()

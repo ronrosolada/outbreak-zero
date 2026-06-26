@@ -29,6 +29,7 @@ function HubService:Initialize(services)
 	self.matchRunning = false
 	self._countdown = nil :: number? -- seconds left in the queue-fill countdown (nil when idle)
 	self._lastReq = {} :: { [Player]: number } -- per-player RequestHubState debounce
+	self._lastToggle = {} :: { [Player]: number } -- per-player ToggleQueue debounce (anti broadcast-spam)
 
 	-- Attach the queue-pad prompt.
 	local pad = self.map.queuePad
@@ -45,6 +46,17 @@ function HubService:Initialize(services)
 			self:_toggleQueue(player)
 		end)
 	end
+
+	-- Mode-select PLAY/QUEUE button (UI path; mirrors the in-world pad prompt — _toggleQueue
+	-- already guards against queuing mid-match).
+	self.net.ToggleQueue.OnServerEvent:Connect(function(player)
+		local now = os.clock()
+		if self._lastToggle[player] and now - self._lastToggle[player] < 0.4 then
+			return -- debounce: each toggle flips state + broadcasts to everyone
+		end
+		self._lastToggle[player] = now
+		self:_toggleQueue(player)
+	end)
 
 	-- Late joiners ask for the current hub state once their client is ready
 	-- (avoids the FireAllClients-vs-client-setup race on join).
@@ -124,6 +136,7 @@ end
 function HubService:OnPlayerRemoving(player: Player)
 	self:_unqueue(player)
 	self._lastReq[player] = nil
+	self._lastToggle[player] = nil
 	self:_broadcast()
 end
 

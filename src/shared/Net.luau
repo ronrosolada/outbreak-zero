@@ -32,6 +32,7 @@ local REMOTE_NAMES = {
 	"RevealInfected", -- server -> survivors: outline these infected for N seconds (Scout Motion Ping)
 	"RevealSurvivors", -- server -> Patient Zero: outline all survivors for N seconds (Outbreak Pulse)
 	"KillFeed", -- server -> all: a feed event (kind, nameA, nameB) — infect / rescue / stun / generator / outbreak
+	"ToggleQueue", -- client -> server: join/leave the Outbreak queue (the mode-select PLAY button; mirrors the pad)
 }
 
 local remotesFolder = ReplicatedStorage:WaitForChild("Remotes")
