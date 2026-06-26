@@ -24,11 +24,14 @@ local Persistence = require(serverRoot:WaitForChild("Lib"):WaitForChild("Persist
 local STORE_NAME = "PlayerData_v1"
 local AUTOSAVE_INTERVAL = 120 -- seconds between background saves
 local MAX_COIN_AWARD = 1000000 -- defensive cap: a single AddCoins grant can never exceed this
+local MAX_GEM_AWARD = 100000 -- defensive cap for a single AddGems grant
+local GEM_PER_LEVEL = 5 -- premium currency drip: gems granted per level gained
 
 -- Fresh-account data. `reconcile` fills any keys missing from older saves, so
 -- this template can grow over time without wiping existing players.
 local DEFAULT_PROFILE = {
 	coins = 0,
+	gems = 0, -- premium currency (◆) — earned via level-ups / gamepasses; cosmetic-only spend
 	xp = 0,
 	level = 1,
 	unlocks = {}, -- map: id -> true (owned cosmetics + unlocked classes)
@@ -99,6 +102,7 @@ function DataService:_mirror(player: Player, profile: any?)
 
 	local atMax = profile.level >= ProgressionConfig.MAX_LEVEL
 	player:SetAttribute("Coins", profile.coins)
+	player:SetAttribute("Gems", profile.gems)
 	player:SetAttribute("Level", profile.level)
 	player:SetAttribute("Xp", profile.xp)
 	player:SetAttribute("XpForNext", if atMax then 0 else self:_xpForLevel(profile.level))
@@ -276,6 +280,7 @@ function DataService:AddXp(player: Player, amount: number): (boolean, number)
 		if profile.xp >= need then
 			profile.xp -= need
 			profile.level += 1
+			profile.gems += GEM_PER_LEVEL -- premium-currency drip on each level gained
 			leveledUp = true
 		else
 			break
@@ -322,6 +327,36 @@ function DataService:TrySpend(player: Player, amount: number): boolean
 		return false
 	end
 	profile.coins -= amount
+	self:_mirror(player)
+	return true
+end
+
+-- == Gems (premium currency) =================================================
+
+function DataService:GetGems(player: Player): number
+	local profile = self.profiles[player]
+	return profile and profile.gems or 0
+end
+
+function DataService:AddGems(player: Player, amount: number)
+	if type(amount) ~= "number" or amount ~= amount or amount <= 0 or amount > MAX_GEM_AWARD then
+		warn(("[DataService] rejected AddGems for %s: %s"):format(player.Name, tostring(amount)))
+		return
+	end
+	local profile = self.profiles[player]
+	if not profile then
+		return
+	end
+	profile.gems = math.max(0, profile.gems + amount)
+	self:_mirror(player)
+end
+
+function DataService:TrySpendGems(player: Player, amount: number): boolean
+	local profile = self.profiles[player]
+	if not profile or profile.gems < amount then
+		return false
+	end
+	profile.gems -= amount
 	self:_mirror(player)
 	return true
 end

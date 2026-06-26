@@ -45,3 +45,6 @@ ModeSelectController:Init()
 
 local ContractsController = require(controllers:WaitForChild("ContractsController"))
 ContractsController:Init()
+
+local CurrencyController = require(controllers:WaitForChild("CurrencyController"))
+CurrencyController:Init()
